@@ -1,0 +1,164 @@
+# =====================================================================
+# curation_template.yaml -- HUMAN-EDITED settings for 05_curate_and_save_h5ad.py
+#
+# Fill `cell_type_column` / `cluster_column` ONLY AFTER reading the
+# inspection reports produced by scripts/04_inspect_anndata_columns.py
+# (data/reports/<dataset_id>_*). The pipeline never auto-decides these.
+#
+# Per-dataset keys
+#   input_h5ad        : interim h5ad written by scripts/03
+#   output_h5ad       : curated h5ad written by scripts/05
+#   cell_type_column  : obs column to copy into obs['cell_type'] (null -> 'unknown')
+#   cluster_column    : obs column to copy into obs['cluster_label'] (null -> skip)
+#   keep_original_obs : keep every original obs column (recommended: true)
+#   rename_obs_columns: {old: new} renames applied before anything else
+#   add_constant_obs  : {col: value} constants added to every cell
+#   condition_mapping : reserved for later; {enabled: false} for now
+# =====================================================================
+
+datasets:
+
+  GSE287569_sc_spinalcord_sod1_ripk1i:
+    input_h5ad: data/interim_h5ad/GSE287569_sc_spinalcord_sod1_ripk1i.h5ad
+    output_h5ad: data/curated_h5ad/GSE287569_sc_spinalcord_sod1_ripk1i.curated.h5ad
+    cell_type_column: null
+    cluster_column: null
+    keep_original_obs: true
+    rename_obs_columns: {}
+    add_constant_obs:
+      species: Mus musculus
+      disease_area: ALS
+    condition_mapping:
+      enabled: false
+
+  GSE173524_sn_lumbar_spinalcord_sod1:
+    input_h5ad: data/interim_h5ad/GSE173524_sn_lumbar_spinalcord_sod1.h5ad
+    output_h5ad: data/curated_h5ad/GSE173524_sn_lumbar_spinalcord_sod1.curated.h5ad
+    cell_type_column: null
+    cluster_column: null
+    keep_original_obs: true
+    rename_obs_columns: {}
+    add_constant_obs:
+      species: Mus musculus
+      disease_area: ALS
+    condition_mapping:
+      enabled: false
+
+  GSE167198_sc_spinalcord_sod1_dropseq:
+    input_h5ad: data/interim_h5ad/GSE167198_sc_spinalcord_sod1_dropseq.h5ad
+    output_h5ad: data/curated_h5ad/GSE167198_sc_spinalcord_sod1_dropseq.curated.h5ad
+    cell_type_column: null
+    cluster_column: null
+    keep_original_obs: true
+    rename_obs_columns: {}
+    add_constant_obs:
+      species: Mus musculus
+      disease_area: ALS
+    condition_mapping:
+      enabled: false
+
+  GSE167327_sc_spinalcord_optn_cd45_enriched_indrop:
+    input_h5ad: data/interim_h5ad/GSE167327_sc_spinalcord_optn_cd45_enriched_indrop.h5ad
+    output_h5ad: data/curated_h5ad/GSE167327_sc_spinalcord_optn_cd45_enriched_indrop.curated.h5ad
+    cell_type_column: null
+    cluster_column: null
+    keep_original_obs: true
+    rename_obs_columns: {}
+    add_constant_obs:
+      species: Mus musculus
+      disease_area: ALS
+    condition_mapping:
+      enabled: false
+
+  GSE167331_sc_spinalcord_optn_facs_microglia_smartseq2_tpm:
+    input_h5ad: data/interim_h5ad/GSE167331_sc_spinalcord_optn_facs_microglia_smartseq2_tpm.h5ad
+    output_h5ad: data/curated_h5ad/GSE167331_sc_spinalcord_optn_facs_microglia_smartseq2_tpm.curated.h5ad
+    cell_type_column: null
+    cluster_column: null
+    keep_original_obs: true
+    rename_obs_columns: {}
+    add_constant_obs:
+      species: Mus musculus
+      disease_area: ALS
+      note: TPM_processed_not_raw_counts
+    condition_mapping:
+      enabled: false
+
+  GSE219201_sn_lumbar_spinalcord_sod1_phd1:
+    input_h5ad: data/interim_h5ad/GSE219201_sn_lumbar_spinalcord_sod1_phd1.h5ad
+    output_h5ad: data/curated_h5ad/GSE219201_sn_lumbar_spinalcord_sod1_phd1.curated.h5ad
+    cell_type_column: null
+    cluster_column: null
+    keep_original_obs: true
+    rename_obs_columns: {}
+    add_constant_obs:
+      species: Mus musculus
+      disease_area: ALS
+    condition_mapping:
+      enabled: false
+
+  GSE242939_sc_spinalcord_sod1_pf04457845:
+    input_h5ad: data/interim_h5ad/GSE242939_sc_spinalcord_sod1_pf04457845.h5ad
+    output_h5ad: data/curated_h5ad/GSE242939_sc_spinalcord_sod1_pf04457845.curated.h5ad
+    cell_type_column: null
+    cluster_column: null
+    keep_original_obs: true
+    rename_obs_columns: {}
+    add_constant_obs:
+      species: Mus musculus
+      disease_area: ALS
+    condition_mapping:
+      enabled: false
+
+  GSE206330_sc_cortex_sod1_facs_glia_soupx:
+    input_h5ad: data/interim_h5ad/GSE206330_sc_cortex_sod1_facs_glia_soupx.h5ad
+    output_h5ad: data/curated_h5ad/GSE206330_sc_cortex_sod1_facs_glia_soupx.curated.h5ad
+    cell_type_column: null
+    cluster_column: null
+    keep_original_obs: true
+    rename_obs_columns: {}
+    add_constant_obs:
+      species: Mus musculus
+      disease_area: ALS
+      note: SoupX_corrected_processed_not_raw_counts
+    condition_mapping:
+      enabled: false
+
+  GSE178693_sc_brainstem_trigeminal_sod1_dropseq:
+    input_h5ad: data/interim_h5ad/GSE178693_sc_brainstem_trigeminal_sod1_dropseq.h5ad
+    output_h5ad: data/curated_h5ad/GSE178693_sc_brainstem_trigeminal_sod1_dropseq.curated.h5ad
+    cell_type_column: null
+    cluster_column: null
+    keep_original_obs: true
+    rename_obs_columns: {}
+    add_constant_obs:
+      species: Mus musculus
+      disease_area: ALS
+    condition_mapping:
+      enabled: false
+
+  GSE295514_sc_brain_rnls8_tdp43_rds:
+    input_h5ad: data/interim_h5ad/GSE295514_sc_brain_rnls8_tdp43_rds.h5ad
+    output_h5ad: data/curated_h5ad/GSE295514_sc_brain_rnls8_tdp43_rds.curated.h5ad
+    cell_type_column: null
+    cluster_column: null
+    keep_original_obs: true
+    rename_obs_columns: {}
+    add_constant_obs:
+      species: Mus musculus
+      disease_area: ALS
+    condition_mapping:
+      enabled: false
+
+  GSE208629_sc_spinalcord_sma:
+    input_h5ad: data/interim_h5ad/GSE208629_sc_spinalcord_sma.h5ad
+    output_h5ad: data/curated_h5ad/GSE208629_sc_spinalcord_sma.curated.h5ad
+    cell_type_column: null
+    cluster_column: null
+    keep_original_obs: true
+    rename_obs_columns: {}
+    add_constant_obs:
+      species: Mus musculus
+      disease_area: SMA
+    condition_mapping:
+      enabled: false

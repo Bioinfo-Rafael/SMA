@@ -1,0 +1,10 @@
+# v2 preprocessing pipeline -- Python deps
+# (R is only needed for the GSE295514 RDS bridge; see README)
+scanpy>=1.10
+anndata>=0.10
+pandas>=2.0
+numpy>=1.24
+scipy>=1.10
+h5py>=3.8
+tqdm>=4.65
+pyyaml>=6.0
