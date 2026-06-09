@@ -1,10 +1,14 @@
-# v2 preprocessing pipeline -- Python deps
-# (R is only needed for the GSE295514 RDS bridge; see README)
+# v2 preprocessing -- Python deps (download scripts + Jupyter notebooks)
 scanpy>=1.10
 anndata>=0.10
 pandas>=2.0
 numpy>=1.24
 scipy>=1.10
 h5py>=3.8
-tqdm>=4.65
 pyyaml>=6.0
+tqdm>=4.65
+ipykernel>=6.0
+jupyterlab>=4.0
+matplotlib>=3.7
+
+# R is only needed for GSE295514 (RDS). See README; not installed via pip.

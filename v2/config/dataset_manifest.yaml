@@ -1,66 +1,53 @@
 # =====================================================================
-# dataset_manifest.yaml  --  SOURCE OF TRUTH for the ALS/SMA scRNA-seq
-# preprocessing pipeline.
+# dataset_manifest.yaml  --  SOURCE OF TRUTH for download + organisation.
 #
-# This file is hand-authored from the project specification. The pipeline
-# scripts MUST treat this file as authoritative and MUST NOT scrape GEO
-# pages to (re)discover SubSeries, file names or URLs.
+# In the notebook-centric v2, the .py scripts only USE this file to:
+#   * validate it            (scripts/00_validate_manifest.py)
+#   * download files         (scripts/01_download_geo_supplement.py)
+#   * extract archives       (scripts/02_extract_archives.py)
+#   * list downloaded files  (scripts/03_list_downloaded_files.py)
 #
-# Each entry under `datasets:` is ONE logical dataset -> ONE interim h5ad.
-# SuperSeries that mix incompatible material (e.g. GSE167332) are split
-# into several logical datasets here on purpose.
+# AnnData loading / inspection / curation / merge happens in the Jupyter
+# notebooks under notebooks/. They read this manifest too (loader_hint,
+# metadata) but the human decides cell-type / cluster / condition columns.
 #
 # Field reference
-#   dataset_id          : unique id, also the report / file stem
-#   parent_gse          : the GEO accession the user browses
-#   source_accession    : the (Sub)Series the files actually live under
-#   loader              : dispatch key in scripts/03_load_to_anndata.py
-#   data_status         : raw_counts | processed_TPM |
-#                         processed_SoupX_corrected | unknown_text_matrix
-#   processing_status   : free text, mirrored into obs + uns
-#   files[]             : {name, url, kind, archive}
-#                         kind in {tar, gz, plain, rds, csv}
-#                         archive=true  -> 02_extract_archives.py unpacks it
-#   metadata_files[]    : auxiliary tables joined onto obs at load time
-#   constants{}         : obs columns broadcast to every cell of the dataset
-#   sample_rules[]      : {match: <regex>, set: {obs: value}} applied per
-#                         sample using the sample label / file name. Multiple
-#                         matches are merged (later rule wins on a key).
-#   condition_from_metadata : if true, do NOT parse condition from file names;
-#                             keep the merged metadata and let a human fill the
-#                             curation yaml after reading the inspection report.
-#
-# NOTE: condition / genotype / treatment that are NOT knowable from the file
-# name are intentionally left as `unknown` here. The inspection reports
-# (scripts/04) expose every column so a human can finalise them in
-# config/curation_template.yaml. Cell-type / cluster columns are NEVER
-# auto-decided by this pipeline.
+#   dataset_id        : unique id; the curated/interim h5ad stem
+#   source_accession  : the (Sub)Series the files actually live under
+#   parent_gse        : the GEO accession the user browses
+#   loader_hint       : which notebook loader helper to use
+#   data_status       : raw_or_filtered_count | processed_TPM |
+#                       processed_SoupX_corrected | RDS_converted_unknown_or_counts
+#   file_type         : free text description
+#   files[]           : {name, url, archive}  (archive=true -> step 02 unpacks)
+#   do_not_use[]      : files / SubSeries deliberately excluded
+#   output            : target curated h5ad file name
+#   metadata{}        : reference constants for notebook curation (NOT auto
+#                       applied by the scripts). Unknown/varying fields are
+#                       intentionally omitted and set to 'unknown' in notebook 03.
+#   notes             : human notes
 # =====================================================================
 
 defaults:
-  organism: Mus musculus
-  data_status: raw_counts
-  processing_status: raw
+  species: Mus musculus
+  data_status: raw_or_filtered_count
 
 datasets:
 
   # -------------------------------------------------------------------
   - dataset_id: GSE287569_sc_spinalcord_sod1_ripk1i
-    parent_gse: GSE287569
     source_accession: GSE287569
-    title: Single cell RNAseq of SOD1 mouse spinal cords
-    loader: 10x_h5_per_sample
-    data_status: raw_counts
-    processing_status: raw
-    sample_count_expected: 12
-    output_h5ad: GSE287569_sc_spinalcord_sod1_ripk1i.h5ad
+    parent_gse: GSE287569
+    loader_hint: 10x_h5_per_sample
+    file_type: TAR of H5
+    data_status: raw_or_filtered_count
+    output: GSE287569_sc_spinalcord_sod1_ripk1i.h5ad
     files:
       - name: GSE287569_RAW.tar
         url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE287nnn/GSE287569/suppl/GSE287569_RAW.tar
-        kind: tar
         archive: true
-    constants:
-      organism: Mus musculus
+    metadata:
+      species: Mus musculus
       tissue: spinal cord
       region: spinal cord
       assay: scRNA-seq
@@ -68,56 +55,39 @@ datasets:
       enrichment: whole spinal cord-derived preparation
       disease_area: ALS
       disease_model: SOD1G93A
-      genotype: unknown
-      disease_status: unknown
-      treatment: unknown
-    sample_rules:
-      - match: '(?i)(^|[_.\-])wt([_.\-]|$)'
-        set: {genotype: WT, disease_status: control, treatment: none}
-      - match: '(?i)sod1.*veh'
-        set: {genotype: SOD1G93A, disease_status: ALS_model, treatment: vehicle}
-      - match: '(?i)sod1.*ripk1i'
-        set: {genotype: SOD1G93A, disease_status: ALS_model, treatment: RIPK1i}
-      - match: '(?i)sod1'
-        set: {genotype: SOD1G93A, disease_status: ALS_model}
+    notes: >
+      12 samples: d120_WT_* (control), d120_SOD1_veh_* (vehicle),
+      d120_SOD1_RIPK1i_* (RIPK1i). Set genotype/treatment in notebook 03.
 
   # -------------------------------------------------------------------
   - dataset_id: GSE173524_sn_lumbar_spinalcord_sod1
-    parent_gse: GSE173524
     source_accession: GSE173524
-    title: Neuronal-Glial Communication Perturbations in Murine SOD1G93A Spinal Cord
-    loader: combined_umi_tsv_with_metadata
-    data_status: raw_counts
-    processing_status: raw
-    condition_from_metadata: true
-    output_h5ad: GSE173524_sn_lumbar_spinalcord_sod1.h5ad
-    files:
-      - name: GSE173524_umi.tsv.gz
-        url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE173nnn/GSE173524/suppl/GSE173524_umi.tsv.gz
-        kind: gz
-        archive: false
-      - name: GSE173524_metadata.nuclei.tsv.gz
-        url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE173nnn/GSE173524/suppl/GSE173524_metadata.nuclei.tsv.gz
-        kind: gz
-        archive: false
-      - name: GSE173524_metadata.samples.tsv.gz
-        url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE173nnn/GSE173524/suppl/GSE173524_metadata.samples.tsv.gz
-        kind: gz
-        archive: false
-      - name: GSE173524_readme.txt
-        url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE173nnn/GSE173524/suppl/GSE173524_readme.txt
-        kind: plain
-        archive: false
-    # GSE173524_umi.sctransform.tsv.gz is deliberately NOT listed: it is the
-    # normalised version. Raw-UMI integration must use GSE173524_umi.tsv.gz.
-    do_not_use:
-      - GSE173524_umi.sctransform.tsv.gz
+    parent_gse: GSE173524
+    loader_hint: combined_umi_tsv_with_metadata
+    file_type: combined UMI tsv + nuclei/sample metadata tsv
+    data_status: raw_or_filtered_count
+    output: GSE173524_sn_lumbar_spinalcord_sod1.h5ad
     matrix_file: GSE173524_umi.tsv.gz
     metadata_files:
       - {name: GSE173524_metadata.nuclei.tsv.gz, role: per_cell}
       - {name: GSE173524_metadata.samples.tsv.gz, role: per_sample}
-    constants:
-      organism: Mus musculus
+    files:
+      - name: GSE173524_umi.tsv.gz
+        url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE173nnn/GSE173524/suppl/GSE173524_umi.tsv.gz
+        archive: false
+      - name: GSE173524_metadata.nuclei.tsv.gz
+        url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE173nnn/GSE173524/suppl/GSE173524_metadata.nuclei.tsv.gz
+        archive: false
+      - name: GSE173524_metadata.samples.tsv.gz
+        url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE173nnn/GSE173524/suppl/GSE173524_metadata.samples.tsv.gz
+        archive: false
+      - name: GSE173524_readme.txt
+        url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE173nnn/GSE173524/suppl/GSE173524_readme.txt
+        archive: false
+    do_not_use:
+      - GSE173524_umi.sctransform.tsv.gz   # normalised; use raw umi.tsv.gz
+    metadata:
+      species: Mus musculus
       tissue: lumbar spinal cord
       region: lumbar spinal cord
       assay: snRNA-seq
@@ -125,29 +95,24 @@ datasets:
       enrichment: nuclei
       disease_area: ALS
       disease_model: SOD1G93A
-      genotype: unknown
-      disease_status: unknown
-      treatment: unknown
-    sample_rules: []
+    notes: Condition columns live in the nuclei/sample metadata; join in notebook.
 
   # -------------------------------------------------------------------
   # GSE167332 SuperSeries -> 3 separate logical datasets (do NOT merge)
   # -------------------------------------------------------------------
   - dataset_id: GSE167198_sc_spinalcord_sod1_dropseq
-    parent_gse: GSE167332
     source_accession: GSE167198
-    title: scRNAseq from spinal cords of SOD1-G93A and WT mice
-    loader: dense_or_text_matrix_bundle
-    data_status: raw_counts
-    processing_status: raw
-    output_h5ad: GSE167198_sc_spinalcord_sod1_dropseq.h5ad
+    parent_gse: GSE167332
+    loader_hint: dense_or_text_matrix_bundle
+    file_type: TAR of TXT
+    data_status: raw_or_filtered_count
+    output: GSE167198_sc_spinalcord_sod1_dropseq.h5ad
     files:
       - name: GSE167198_RAW.tar
         url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE167nnn/GSE167198/suppl/GSE167198_RAW.tar
-        kind: tar
         archive: true
-    constants:
-      organism: Mus musculus
+    metadata:
+      species: Mus musculus
       tissue: spinal cord
       region: spinal cord
       assay: scRNA-seq
@@ -155,43 +120,26 @@ datasets:
       enrichment: whole spinal cord-derived cell suspension
       disease_area: ALS
       disease_model: SOD1G93A
-      genotype: unknown
-      disease_status: unknown
-      treatment: unknown
-    sample_rules:
-      - match: '(?i)wt.*veh'
-        set: {genotype: WT, disease_status: control, treatment: vehicle}
-      - match: '(?i)sod1.*veh'
-        set: {genotype: SOD1G93A, disease_status: ALS_model, treatment: vehicle}
-      - match: '(?i)sod1.*nec'
-        set: {genotype: SOD1G93A, disease_status: ALS_model, treatment: Nec-1s_RIPK1i}
-      - match: '(?i)(^|[_.\-])wt([_.\-]|$)'
-        set: {genotype: WT, disease_status: control}
-      - match: '(?i)sod1'
-        set: {genotype: SOD1G93A, disease_status: ALS_model}
+    notes: Samples WT-Veh / SOD1-Veh / SOD1-Nec. Set condition in notebook 03.
 
   # -------------------------------------------------------------------
   - dataset_id: GSE167327_sc_spinalcord_optn_cd45_enriched_indrop
-    parent_gse: GSE167332
     source_accession: GSE167327
-    title: scRNAseq of CD45 enriched cells from spinal cords of Optn floxed and KO mice
-    loader: mtx_or_text_bundle
-    data_status: raw_counts
-    processing_status: raw
-    output_h5ad: GSE167327_sc_spinalcord_optn_cd45_enriched_indrop.h5ad
+    parent_gse: GSE167332
+    loader_hint: mtx_or_text_bundle
+    file_type: TAR of MTX/TXT plus side TXT
+    data_status: raw_or_filtered_count
+    output: GSE167327_sc_spinalcord_optn_cd45_enriched_indrop.h5ad
+    side_table: GSE167327.txt.gz
     files:
       - name: GSE167327_RAW.tar
         url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE167nnn/GSE167327/suppl/GSE167327_RAW.tar
-        kind: tar
         archive: true
       - name: GSE167327.txt.gz
         url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE167nnn/GSE167327/suppl/GSE167327.txt.gz
-        kind: gz
         archive: false
-    # small side table: report its content, do not assume it is a matrix
-    side_table: GSE167327.txt.gz
-    constants:
-      organism: Mus musculus
+    metadata:
+      species: Mus musculus
       tissue: spinal cord
       region: spinal cord
       assay: scRNA-seq
@@ -199,32 +147,23 @@ datasets:
       enrichment: CD45 enriched cells
       disease_area: ALS
       disease_model: Optn floxed/KO
-      genotype: unknown
-      disease_status: unknown
-      treatment: unknown
-    sample_rules:
-      - match: '(?i)(flox|fl[_.\-]?fl|ctrl|control|(^|[_.\-])wt([_.\-]|$))'
-        set: {optn_status: floxed}
-      - match: '(?i)((^|[_.\-])ko([_.\-]|$)|optn.*ko)'
-        set: {optn_status: KO}
+    notes: CD45 enriched -> keep separate from whole spinal cord datasets.
 
   # -------------------------------------------------------------------
   - dataset_id: GSE167331_sc_spinalcord_optn_facs_microglia_smartseq2_tpm
-    parent_gse: GSE167332
     source_accession: GSE167331
-    title: scRNAseq of FACS-isolated microglia from spinal cords of Optn KO mice
-    loader: dense_gene_by_cell_matrix
-    data_status: processed_TPM   # IMPORTANT: TPM matrix, NOT raw UMI counts
-    processing_status: RSEM_TPM
-    output_h5ad: GSE167331_sc_spinalcord_optn_facs_microglia_smartseq2_tpm.h5ad
+    parent_gse: GSE167332
+    loader_hint: dense_gene_by_cell_matrix
+    file_type: TPM matrix (RSEM genes x cells)
+    data_status: processed_TPM     # NOT raw UMI counts
+    output: GSE167331_sc_spinalcord_optn_facs_microglia_smartseq2_tpm.h5ad
+    matrix_file: GSE167331_nextseq_180111_rsem.genes.tpm.matrix.gz
     files:
       - name: GSE167331_nextseq_180111_rsem.genes.tpm.matrix.gz
         url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE167nnn/GSE167331/suppl/GSE167331_nextseq_180111_rsem.genes.tpm.matrix.gz
-        kind: gz
         archive: false
-    matrix_file: GSE167331_nextseq_180111_rsem.genes.tpm.matrix.gz
-    constants:
-      organism: Mus musculus
+    metadata:
+      species: Mus musculus
       tissue: spinal cord
       region: spinal cord
       assay: scRNA-seq
@@ -232,27 +171,22 @@ datasets:
       enrichment: FACS-isolated microglia (CD11b+ CX3CR1+ CD45-int)
       disease_area: ALS
       disease_model: Optn KO
-      genotype: OptnKO
-      disease_status: unknown
-      treatment: unknown
-    sample_rules: []
+    notes: TPM matrix -> data_status processed_TPM; never pool with raw counts.
 
   # -------------------------------------------------------------------
   - dataset_id: GSE219201_sn_lumbar_spinalcord_sod1_phd1
-    parent_gse: GSE219201
     source_accession: GSE219201
-    title: Targeting EGLN2/PHD1 protects motor neurons and normalizes the astrocytic interferon response
-    loader: 10x_mtx_per_sample
-    data_status: raw_counts
-    processing_status: raw
-    output_h5ad: GSE219201_sn_lumbar_spinalcord_sod1_phd1.h5ad
+    parent_gse: GSE219201
+    loader_hint: 10x_mtx_per_sample
+    file_type: TAR of MTX/TSV
+    data_status: raw_or_filtered_count
+    output: GSE219201_sn_lumbar_spinalcord_sod1_phd1.h5ad
     files:
       - name: GSE219201_RAW.tar
         url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE219nnn/GSE219201/suppl/GSE219201_RAW.tar
-        kind: tar
         archive: true
-    constants:
-      organism: Mus musculus
+    metadata:
+      species: Mus musculus
       tissue: lumbar spinal cord
       region: lumbar spinal cord
       assay: snRNA-seq
@@ -260,80 +194,57 @@ datasets:
       enrichment: nuclei
       disease_area: ALS
       disease_model: SOD1G93A
-      genotype: SOD1G93A
-      disease_status: ALS_model
-      treatment: unknown
-    sample_rules:
-      - match: '(?i)phd1.{0,4}(wt|\+\+|\+/\+|plus|pos|fl)'
-        set: {phd1_status: WT}
-      - match: '(?i)phd1.{0,4}(ko|\-\-|-/-|minus|neg)'
-        set: {phd1_status: KO}
+    notes: SOD1G93A PHD1+/+ vs PHD1-/-; set phd1_status in notebook 03.
 
   # -------------------------------------------------------------------
   # GSE242942 SuperSeries: use ONLY the scRNA-seq SubSeries GSE242939.
-  # GSE242940 (bulk RNA-seq) is deliberately excluded.
   - dataset_id: GSE242939_sc_spinalcord_sod1_pf04457845
-    parent_gse: GSE242942
     source_accession: GSE242939
-    title: scRNA-seq of spinal cord of SOD1*G93A mice treated with PF-04457845 or vehicle
-    loader: 10x_mtx_per_sample
-    data_status: raw_counts
-    processing_status: raw
-    output_h5ad: GSE242939_sc_spinalcord_sod1_pf04457845.h5ad
+    parent_gse: GSE242942
+    loader_hint: 10x_mtx_per_sample
+    file_type: TAR of MTX/TSV
+    data_status: raw_or_filtered_count
+    output: GSE242939_sc_spinalcord_sod1_pf04457845.h5ad
     files:
       - name: GSE242939_RAW.tar
         url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE242nnn/GSE242939/suppl/GSE242939_RAW.tar
-        kind: tar
         archive: true
     do_not_use:
       - GSE242940   # bulk RNA-seq SubSeries
-    constants:
-      organism: Mus musculus
+    metadata:
+      species: Mus musculus
       tissue: spinal cord
       region: spinal cord
       assay: scRNA-seq
       technology: 10x MTX/TSV
-      enrichment: not specified
       disease_area: ALS
       disease_model: SOD1G93A
-      genotype: SOD1G93A
-      disease_status: ALS_model
-      treatment: unknown
-    sample_rules:
-      - match: '(?i)veh'
-        set: {treatment: vehicle}
-      - match: '(?i)(pf[_.\-]?0?4457845|pf04457845|(^|[_.\-])pf([_.\-]|$))'
-        set: {treatment: PF-04457845}
+    notes: Vehicle vs PF-04457845; set treatment in notebook 03.
 
   # -------------------------------------------------------------------
   - dataset_id: GSE206330_sc_cortex_sod1_facs_glia_soupx
-    parent_gse: GSE206330
     source_accession: GSE206330
-    title: Cortical glia in SOD1(G93A) mice are subtly affected by ALS-like pathology
-    loader: processed_count_matrix_with_metadata
-    data_status: processed_SoupX_corrected   # IMPORTANT: not raw Cell Ranger
-    processing_status: SoupX_corrected
-    condition_from_metadata: true
-    output_h5ad: GSE206330_sc_cortex_sod1_facs_glia_soupx.h5ad
-    files:
-      - name: GSE206330_processed_SoupX_corrected.txt.gz
-        url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE206nnn/GSE206330/suppl/GSE206330_processed_SoupX_corrected.txt.gz
-        kind: gz
-        archive: false
-      - name: GSE206330_processed_SoupX_corrected_metadata.csv.gz
-        url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE206nnn/GSE206330/suppl/GSE206330_processed_SoupX_corrected_metadata.csv.gz
-        kind: gz
-        archive: false
-      - name: GSE206330_preprocessed_data.txt.gz
-        url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE206nnn/GSE206330/suppl/GSE206330_preprocessed_data.txt.gz
-        kind: gz
-        archive: false
-        optional: true
+    parent_gse: GSE206330
+    loader_hint: processed_count_matrix_with_metadata
+    file_type: processed TXT + metadata CSV
+    data_status: processed_SoupX_corrected   # NOT raw Cell Ranger
+    output: GSE206330_sc_cortex_sod1_facs_glia_soupx.h5ad
     matrix_file: GSE206330_processed_SoupX_corrected.txt.gz
     metadata_files:
       - {name: GSE206330_processed_SoupX_corrected_metadata.csv.gz, role: per_cell}
-    constants:
-      organism: Mus musculus
+    files:
+      - name: GSE206330_processed_SoupX_corrected.txt.gz
+        url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE206nnn/GSE206330/suppl/GSE206330_processed_SoupX_corrected.txt.gz
+        archive: false
+      - name: GSE206330_processed_SoupX_corrected_metadata.csv.gz
+        url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE206nnn/GSE206330/suppl/GSE206330_processed_SoupX_corrected_metadata.csv.gz
+        archive: false
+      - name: GSE206330_preprocessed_data.txt.gz
+        url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE206nnn/GSE206330/suppl/GSE206330_preprocessed_data.txt.gz
+        archive: false
+        optional: true
+    metadata:
+      species: Mus musculus
       tissue: cerebral cortex
       region: motor cortex-related cortical glia
       assay: scRNA-seq
@@ -341,106 +252,76 @@ datasets:
       enrichment: FACS enriched astrocytes/microglia/oligodendrocytes
       disease_area: ALS
       disease_model: SOD1G93A
-      genotype: unknown
-      disease_status: unknown
-      treatment: unknown
-      age_month: unknown
-    sample_rules: []
+    notes: SoupX corrected processed data -> keep separate from raw counts.
 
   # -------------------------------------------------------------------
   - dataset_id: GSE178693_sc_brainstem_trigeminal_sod1_dropseq
-    parent_gse: GSE178693
     source_accession: GSE178693
-    title: Single-cell RNA-seq analysis of the brainstem of mutant SOD1 mice
-    loader: nested_tar_dropseq
-    data_status: raw_counts
-    processing_status: raw
-    output_h5ad: GSE178693_sc_brainstem_trigeminal_sod1_dropseq.h5ad
+    parent_gse: GSE178693
+    loader_hint: nested_tar_dropseq
+    file_type: TAR of TAR
+    data_status: raw_or_filtered_count
+    output: GSE178693_sc_brainstem_trigeminal_sod1_dropseq.h5ad
     files:
       - name: GSE178693_RAW.tar
         url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE178nnn/GSE178693/suppl/GSE178693_RAW.tar
-        kind: tar
         archive: true
-    constants:
-      organism: Mus musculus
+    metadata:
+      species: Mus musculus
       tissue: pontine brainstem
       region: pontine brainstem and trigeminal ganglion-related cells
       assay: scRNA-seq
       technology: Drop-seq
-      enrichment: not specified
       disease_area: ALS
       disease_model: SOD1G93A
-      genotype: unknown
-      disease_status: unknown
-      treatment: unknown
-    sample_rules:
-      - match: '(?i)((^|[_.\-])wt([_.\-]|$)|non.?carrier|wild)'
-        set: {genotype: WT, disease_status: control}
-      - match: '(?i)(sod1|g93a|mutant|(^|[_.\-])mut)'
-        set: {genotype: SOD1G93A, disease_status: ALS_model}
+    notes: RAW.tar may contain per-sample tars; step 02 extracts recursively.
 
   # -------------------------------------------------------------------
   - dataset_id: GSE295514_sc_brain_rnls8_tdp43_rds
-    parent_gse: GSE295514
     source_accession: GSE295514
-    title: Rod-shaped microglia interact with neuronal dendrites in TDP-43 related neurodegeneration
-    loader: rds_bridge
-    data_status: raw_counts
-    processing_status: unknown
-    condition_from_metadata: true
-    output_h5ad: GSE295514_sc_brain_rnls8_tdp43_rds.h5ad
+    parent_gse: GSE295514
+    loader_hint: R_jupyter_kernel_manual
+    file_type: RDS (Seurat or SingleCellExperiment)
+    data_status: RDS_converted_unknown_or_counts
+    output: GSE295514_sc_brain_rnls8_tdp43_rds.h5ad
+    rds_file: GSE295514_ALS_mouse_brain.rds
+    intermediate_from_r: GSE295514     # data/intermediate_from_r/GSE295514/
     files:
       - name: GSE295514_ALS_mouse_brain.rds
         url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE295nnn/GSE295514/suppl/GSE295514_ALS_mouse_brain.rds
-        kind: rds
         archive: false
-    rds_file: GSE295514_ALS_mouse_brain.rds
-    constants:
-      organism: Mus musculus
+    metadata:
+      species: Mus musculus
       tissue: brain
       region: brain
       assay: scRNA-seq
       technology: 10x (RDS object provided)
-      enrichment: not specified
       disease_area: ALS
       disease_model: rNLS8 (TDP-43)
-      genotype: unknown
-      disease_status: unknown
-      treatment: unknown
-    sample_rules:
-      - match: '(?i)(control|ctrl)'
-        set: {disease_status: control}
-      - match: '(?i)(rnls8|nls)'
-        set: {disease_status: ALS_TDP43_model, disease_model: rNLS8}
+    notes: >
+      Open in the R Jupyter kernel (notebooks/R/01_GSE295514_read_rds.ipynb),
+      inspect class/assays/meta.data, then export counts.mtx + metadata.csv +
+      genes.csv + barcodes.csv to data/intermediate_from_r/GSE295514/. The
+      Python notebook reads those.
 
   # -------------------------------------------------------------------
   - dataset_id: GSE208629_sc_spinalcord_sma
-    parent_gse: GSE208629
     source_accession: GSE208629
-    title: Single-cell transcriptomic data in the spinal cord of Taiwanese type I SMA mice
-    loader: 10x_mtx_per_sample
-    data_status: raw_counts
-    processing_status: raw
-    output_h5ad: GSE208629_sc_spinalcord_sma.h5ad
+    parent_gse: GSE208629
+    loader_hint: 10x_mtx_per_sample
+    file_type: TAR of MTX/TSV
+    data_status: raw_or_filtered_count
+    output: GSE208629_sc_spinalcord_sma.h5ad
     files:
       - name: GSE208629_RAW.tar
         url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE208nnn/GSE208629/suppl/GSE208629_RAW.tar
-        kind: tar
         archive: true
-    constants:
-      organism: Mus musculus
+    metadata:
+      species: Mus musculus
       tissue: spinal cord
       region: spinal cord
       assay: scRNA-seq
       technology: 10x MTX/TSV
-      enrichment: not specified
       disease_area: SMA
       disease_model: SMA Taiwanese type I
-      genotype: unknown
-      disease_status: unknown
-      treatment: unknown
-    sample_rules:
-      - match: '(?i)((^|[_.\-])con([_.\-]|$)|control)'
-        set: {disease_status: control}
-      - match: '(?i)sma'
-        set: {disease_status: SMA_model}
+    notes: SMA vs Con; set disease_status in notebook 03.

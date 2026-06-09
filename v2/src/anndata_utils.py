@@ -1,11 +1,9 @@
-"""Shared AnnData helpers: standard obs/var schema, sample classification,
-global obs_names, data-status tagging and safe h5ad saving.
+"""AnnData helpers shared by the notebooks: standard obs/var schema, unique
+obs_names, h5ad save/load collection, and a status-aware merge.
 
-Design rules (from the project spec):
-* Never auto-decide cell-type / cluster columns.
-* Never drop original obs columns.
-* raw counts go into adata.X; TPM / SoupX / processed status is recorded in
-  adata.uns['data_status'] and adata.obs['processing_status'].
+These are *functions to call from notebooks*, not an execution pipeline.
+Raw counts go into adata.X; processed status (TPM / SoupX / RDS) is recorded
+in adata.obs['data_status'] and adata.uns['data_status'] by the notebook.
 """
 from __future__ import annotations
 
@@ -13,6 +11,7 @@ import logging
 import re
 from pathlib import Path
 
+import anndata as ad
 import numpy as np
 import pandas as pd
 import scipy.sparse as sp
@@ -21,61 +20,21 @@ log = logging.getLogger("anndata_utils")
 
 UNKNOWN = "unknown"
 
-# Minimum obs columns every interim AnnData must carry.
+# Standard obs schema (notebook 03 fills these; unknown is acceptable).
 REQUIRED_OBS_COLS = [
-    "cell_id_original", "cell_id", "sample_id", "sample_label", "gsm_id",
-    "parent_gse", "source_accession", "dataset_id", "tissue", "region",
-    "assay", "technology", "enrichment", "disease_status", "disease_model",
-    "genotype", "treatment", "age", "age_month", "sex", "replicate",
-    "processing_status", "data_status", "source_file",
+    "cell_id_original", "cell_id", "sample_id", "sample_label",
+    "source_accession", "parent_gse", "dataset_id", "species", "disease_area",
+    "tissue", "region", "assay", "technology", "enrichment", "disease_status",
+    "disease_model", "genotype", "treatment", "age", "age_month", "sex",
+    "replicate", "data_status", "processing_status", "source_file",
 ]
-
-# Minimum var columns.
 REQUIRED_VAR_COLS = [
     "gene_id", "gene_symbol", "gene_symbol_upper", "ensembl_id", "feature_type",
 ]
 
 
 # --------------------------------------------------------------------------
-# paths
-# --------------------------------------------------------------------------
-def project_root() -> Path:
-    """v2/ project root (this file lives in v2/src/)."""
-    return Path(__file__).resolve().parent.parent
-
-
-def project_paths(root: Path | None = None) -> dict:
-    root = Path(root) if root is not None else project_root()
-    data = root / "data"
-    return {
-        "root": root,
-        "config": root / "config",
-        "data": data,
-        "raw": data / "raw",
-        "extracted": data / "extracted",
-        "interim": data / "interim_h5ad",
-        "curated": data / "curated_h5ad",
-        "reports": data / "reports",
-    }
-
-
-def ensure_dirs(paths: dict) -> None:
-    for key, value in paths.items():
-        if key in ("root", "config"):
-            continue
-        Path(value).mkdir(parents=True, exist_ok=True)
-
-
-def dataset_raw_dir(paths: dict, ds: dict) -> Path:
-    return Path(paths["raw"]) / ds["source_accession"]
-
-
-def dataset_extracted_dir(paths: dict, ds: dict) -> Path:
-    return Path(paths["extracted"]) / ds["source_accession"]
-
-
-# --------------------------------------------------------------------------
-# file-name parsing / sample classification
+# file-name parsing (mechanical sample id from GEO file names)
 # --------------------------------------------------------------------------
 _MATRIX_SUFFIX_RE = re.compile(
     r"[_.]?(filtered_feature_bc_matrix\.h5|raw_feature_bc_matrix\.h5|"
@@ -83,26 +42,21 @@ _MATRIX_SUFFIX_RE = re.compile(
     r"features\.tsv(\.gz)?|genes\.tsv(\.gz)?)$",
     re.IGNORECASE,
 )
-
 _KIND_SUFFIXES = [
-    ("filtered_feature_bc_matrix.h5", "h5"),
-    ("raw_feature_bc_matrix.h5", "h5"),
-    ("feature_bc_matrix.h5", "h5"),
-    (".h5", "h5"),
-    ("matrix.mtx.gz", "mtx"),
-    ("matrix.mtx", "mtx"),
-    ("barcodes.tsv.gz", "barcodes"),
-    ("barcodes.tsv", "barcodes"),
-    ("features.tsv.gz", "features"),
-    ("features.tsv", "features"),
-    ("genes.tsv.gz", "features"),
-    ("genes.tsv", "features"),
+    ("filtered_feature_bc_matrix.h5", "h5"), ("raw_feature_bc_matrix.h5", "h5"),
+    ("feature_bc_matrix.h5", "h5"), (".h5", "h5"),
+    ("matrix.mtx.gz", "mtx"), ("matrix.mtx", "mtx"),
+    ("barcodes.tsv.gz", "barcodes"), ("barcodes.tsv", "barcodes"),
+    ("features.tsv.gz", "features"), ("features.tsv", "features"),
+    ("genes.tsv.gz", "features"), ("genes.tsv", "features"),
 ]
 
 
+def sanitize_id(text: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "-", str(text)).strip("-") or UNKNOWN
+
+
 def parse_geo_filename(fname: str) -> dict:
-    """Pull GSM id, matrix kind and a sample 'prefix' (used to group the
-    barcodes/features/matrix triplet of one 10x sample)."""
     base = Path(fname).name
     low = base.lower()
     gsm = None
@@ -115,133 +69,70 @@ def parse_geo_filename(fname: str) -> dict:
             kind = k
             break
     prefix = _MATRIX_SUFFIX_RE.sub("", base)
-    # sample label = prefix without the leading GSM id token
-    sample_label = re.sub(r"^GSM\d+[_.\-]?", "", prefix)
-    return {
-        "file": base,
-        "gsm_id": gsm or UNKNOWN,
-        "kind": kind,
-        "prefix": prefix,
-        "sample_label": sample_label or prefix,
-    }
-
-
-def sanitize_id(text: str) -> str:
-    return re.sub(r"[^A-Za-z0-9]+", "-", str(text)).strip("-") or UNKNOWN
-
-
-def classify_sample(name: str, rules) -> tuple[dict, list]:
-    """Apply every rule whose regex matches `name`; merge their `set` dicts in
-    list order (later rule wins on a shared key). Returns (values, matched)."""
-    out: dict = {}
-    matched: list = []
-    for rule in rules or []:
-        try:
-            if re.search(rule["match"], name):
-                out.update(rule.get("set", {}) or {})
-                matched.append(rule["match"])
-        except re.error as exc:  # pragma: no cover - bad manifest regex
-            log.warning("bad regex %r in manifest: %s", rule.get("match"), exc)
-    return out, matched
+    sample_label = re.sub(r"^GSM\d+[_.\-]?", "", prefix) or prefix
+    return {"file": base, "gsm_id": gsm or UNKNOWN, "kind": kind,
+            "prefix": prefix, "sample_label": sample_label}
 
 
 # --------------------------------------------------------------------------
-# obs / var construction
+# obs / var schema
 # --------------------------------------------------------------------------
-def make_sample_obs(index, ds: dict, *, sample_id: str, sample_label: str,
-                    gsm_id: str, source_file: str, extra: dict | None = None) -> pd.DataFrame:
-    """Build a full-schema obs frame for one sample (constants + per-sample
-    rules). `index` are the original cell barcodes / ids."""
-    idx = pd.Index([str(x) for x in index])
-    obs = pd.DataFrame(index=idx)
-    for col in REQUIRED_OBS_COLS:
-        obs[col] = UNKNOWN
-
-    constants = dict(ds.get("constants", {}) or {})
-    constants.setdefault("parent_gse", ds.get("parent_gse", UNKNOWN))
-    constants.setdefault("source_accession", ds.get("source_accession", UNKNOWN))
-    constants.setdefault("dataset_id", ds.get("dataset_id", UNKNOWN))
-    for key, val in constants.items():
-        obs[key] = val
-
-    obs["cell_id_original"] = idx.astype(str)
-    obs["sample_id"] = sample_id
-    obs["sample_label"] = sample_label
-    obs["gsm_id"] = gsm_id
-    obs["source_file"] = source_file
-    obs["data_status"] = ds.get("data_status", UNKNOWN)
-    obs["processing_status"] = ds.get("processing_status", UNKNOWN)
-
-    # per-sample condition rules, matched against label + id + file name
-    match_target = f"{sample_label} {sample_id} {source_file}"
-    setvals, _ = classify_sample(match_target, ds.get("sample_rules"))
-    for key, val in setvals.items():
-        obs[key] = val
-
-    if extra:
-        for key, val in extra.items():
-            obs[key] = val
-    return obs
-
-
-def standardize_var(adata, *, gene_symbol=None, gene_id=None,
-                    ensembl_id=None, feature_type=None):
-    """Ensure the required var columns exist. Arrays may be passed explicitly;
-    missing pieces fall back to var_names / 'unknown'."""
-    n = adata.n_vars
-    if gene_symbol is None:
-        gene_symbol = adata.var_names.astype(str).to_numpy()
-    gene_symbol = np.asarray([str(x) for x in gene_symbol], dtype=object)
-
-    adata.var["gene_symbol"] = gene_symbol
-    adata.var["gene_symbol_upper"] = np.asarray(
-        [s.upper() for s in gene_symbol], dtype=object)
-    adata.var["gene_id"] = np.asarray(
-        [str(x) for x in (gene_id if gene_id is not None else gene_symbol)],
-        dtype=object)
-    adata.var["ensembl_id"] = np.asarray(
-        [str(x) for x in (ensembl_id if ensembl_id is not None else [UNKNOWN] * n)],
-        dtype=object)
-    adata.var["feature_type"] = np.asarray(
-        [str(x) for x in (feature_type if feature_type is not None else [UNKNOWN] * n)],
-        dtype=object)
-    return adata
-
-
-def init_obs_schema(adata):
+def ensure_standard_obs_columns(adata, defaults: dict | None = None):
+    """Add any missing standard obs columns (filled with 'unknown' or the
+    given defaults). Never drops existing columns."""
+    defaults = defaults or {}
+    if "cell_id_original" not in adata.obs.columns:
+        adata.obs["cell_id_original"] = adata.obs_names.astype(str)
     for col in REQUIRED_OBS_COLS:
         if col not in adata.obs.columns:
-            adata.obs[col] = UNKNOWN
+            adata.obs[col] = defaults.get(col, UNKNOWN)
+    for col, val in defaults.items():
+        adata.obs[col] = val
+    if (adata.obs["cell_id"] == UNKNOWN).all():
+        adata.obs["cell_id"] = adata.obs_names.astype(str)
     return adata
 
 
-def set_global_obs_names(adata, source_accession: str):
-    """obs_names := {source_accession}_{sample_id}_{original_barcode}, made
-    globally unique. Also writes obs['cell_id']."""
-    n = adata.n_obs
-    sid = (adata.obs["sample_id"].astype(str)
-           if "sample_id" in adata.obs else pd.Series([UNKNOWN] * n))
-    orig = (adata.obs["cell_id_original"].astype(str)
-            if "cell_id_original" in adata.obs else pd.Series(adata.obs_names))
-    names = [f"{source_accession}_{s}_{b}" for s, b in zip(sid, orig)]
-    adata.obs_names = pd.Index(names)
+def ensure_standard_var_columns(adata, *, gene_symbol=None, gene_id=None,
+                                ensembl_id=None, feature_type=None):
+    """Ensure gene_id / gene_symbol / gene_symbol_upper / ensembl_id /
+    feature_type exist. Missing pieces fall back to var_names / 'unknown'."""
+    n = adata.n_vars
+    if gene_symbol is None:
+        gene_symbol = (adata.var["gene_symbol"].to_numpy()
+                       if "gene_symbol" in adata.var.columns
+                       else adata.var_names.astype(str).to_numpy())
+    gene_symbol = np.asarray([str(x) for x in gene_symbol], dtype=object)
+    adata.var["gene_symbol"] = gene_symbol
+    adata.var["gene_symbol_upper"] = np.asarray([s.upper() for s in gene_symbol], dtype=object)
+    if gene_id is None:
+        gene_id = (adata.var["gene_id"].to_numpy()
+                   if "gene_id" in adata.var.columns else gene_symbol)
+    adata.var["gene_id"] = np.asarray([str(x) for x in gene_id], dtype=object)
+    if ensembl_id is None:
+        ensembl_id = (adata.var["ensembl_id"].to_numpy()
+                      if "ensembl_id" in adata.var.columns else [UNKNOWN] * n)
+    adata.var["ensembl_id"] = np.asarray([str(x) for x in ensembl_id], dtype=object)
+    if feature_type is None:
+        feature_type = (adata.var["feature_type"].to_numpy()
+                        if "feature_type" in adata.var.columns else [UNKNOWN] * n)
+    adata.var["feature_type"] = np.asarray([str(x) for x in feature_type], dtype=object)
+    return adata
+
+
+def make_obs_names_unique(adata, prefix: str | None = None):
+    """Make obs_names globally unique. With `prefix` (e.g. source_accession),
+    names become {prefix}_{sample_id}_{original}; otherwise just made unique."""
+    if "cell_id_original" not in adata.obs.columns:
+        adata.obs["cell_id_original"] = adata.obs_names.astype(str)
+    if prefix is not None:
+        sid = (adata.obs["sample_id"].astype(str)
+               if "sample_id" in adata.obs.columns else pd.Series([UNKNOWN] * adata.n_obs))
+        orig = adata.obs["cell_id_original"].astype(str)
+        adata.obs_names = pd.Index(
+            [f"{prefix}_{s}_{b}" for s, b in zip(sid, orig)])
     adata.obs_names_make_unique()
     adata.obs["cell_id"] = adata.obs_names.astype(str)
-    return adata
-
-
-def set_data_status(adata, ds: dict):
-    data_status = ds.get("data_status", UNKNOWN)
-    processing_status = ds.get("processing_status", UNKNOWN)
-    adata.obs["data_status"] = data_status
-    adata.obs["processing_status"] = processing_status
-    adata.uns["data_status"] = data_status
-    adata.uns["processing_status"] = processing_status
-    adata.uns["dataset_id"] = ds.get("dataset_id", UNKNOWN)
-    adata.uns["parent_gse"] = ds.get("parent_gse", UNKNOWN)
-    adata.uns["source_accession"] = ds.get("source_accession", UNKNOWN)
-    adata.uns["title"] = ds.get("title", UNKNOWN)
-    adata.uns["loader"] = ds.get("loader", UNKNOWN)
     return adata
 
 
@@ -251,32 +142,74 @@ def to_csr(adata):
     return adata
 
 
+# --------------------------------------------------------------------------
+# save / load
+# --------------------------------------------------------------------------
 def _stringify_object_cols(df: pd.DataFrame) -> None:
     for col in df.columns:
         if df[col].dtype == object:
             df[col] = df[col].astype(str)
 
 
-def save_h5ad(adata, path, overwrite: bool = False):
+def save_h5ad(adata, path, *, overwrite: bool = True, sparse: bool = True):
     path = Path(path)
     if path.exists() and not overwrite:
-        log.info("skip existing %s", path)
+        log.info("skip existing %s", path.name)
         return path
     path.parent.mkdir(parents=True, exist_ok=True)
+    if sparse:
+        to_csr(adata)
     _stringify_object_cols(adata.obs)
     _stringify_object_cols(adata.var)
     adata.write_h5ad(path)
-    log.info("wrote %s  (%d cells x %d genes)", path, adata.n_obs, adata.n_vars)
+    log.info("wrote %s (%d cells x %d genes)", path.name, adata.n_obs, adata.n_vars)
     return path
 
 
-def finalize_anndata(adata, ds: dict):
-    """Apply the shared finishing steps after a loader returns an AnnData with
-    X (cells x genes), var (symbols) and full-schema obs."""
-    init_obs_schema(adata)
-    if not set(REQUIRED_VAR_COLS).issubset(adata.var.columns):
-        standardize_var(adata)
-    set_data_status(adata, ds)
-    set_global_obs_names(adata, ds.get("source_accession", UNKNOWN))
-    to_csr(adata)
-    return adata
+def load_h5ad_collection(directory, pattern: str = "*.h5ad", backed=None) -> dict:
+    """Load every h5ad in a directory into {file_stem: AnnData}."""
+    directory = Path(directory)
+    out: dict = {}
+    for p in sorted(directory.glob(pattern)):
+        out[p.stem] = ad.read_h5ad(p, backed=backed)
+    return out
+
+
+# --------------------------------------------------------------------------
+# merge
+# --------------------------------------------------------------------------
+def merge_adatas(adatas, *, join: str = "outer", gene_key: str = "gene_symbol_upper",
+                 label: str | None = None, keys=None):
+    """Concatenate AnnData objects on a shared gene key (default
+    gene_symbol_upper). No normalization / batch correction is performed.
+
+    `adatas` may be a list or a {name: AnnData} dict (dict keys used as `keys`).
+    """
+    if isinstance(adatas, dict):
+        keys = list(adatas.keys())
+        items = list(adatas.values())
+    else:
+        items = list(adatas)
+
+    parts = []
+    for a in items:
+        b = a.copy()
+        if gene_key in b.var.columns:
+            b.var_names = pd.Index(b.var[gene_key].astype(str))
+            b.var_names_make_unique()
+        parts.append(b)
+
+    merged = ad.concat(parts, join=join, merge="same", uns_merge=None,
+                       label=label, keys=keys, index_unique=None)
+    merged.obs_names_make_unique()
+    return merged
+
+
+def cell_count_table(adata, keys) -> pd.DataFrame:
+    """Cell counts per value for each obs key present (long format)."""
+    rows = []
+    for key in keys:
+        if key in adata.obs.columns:
+            for value, count in adata.obs[key].astype(str).value_counts().items():
+                rows.append({"column": key, "value": value, "n_cells": int(count)})
+    return pd.DataFrame(rows)

@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
-# v2 preprocessing driver. Runs steps 00..05 in order.
-# Step 06 is a template and is NOT run automatically.
+# v2 DOWNLOAD/EXTRACT driver ONLY.
 #
-#   ./run.sh                 # all steps 00-05
-#   ./run.sh 01 02 03        # only these steps
-#   PYTHON=../v1/.venv/bin/python ./run.sh   # reuse the v1 venv
+# This runs the .py steps that fetch and organise GEO Supplementary files:
+#   1. validate manifest
+#   2. download
+#   3. extract archives
+#   4. list downloaded files
 #
-# Override the interpreter with the PYTHON env var. By default it looks for a
-# local .venv, then falls back to `python3`.
+# Everything after this (AnnData loading, inspection, curation, merge, h5ad
+# saving) is done in the Jupyter notebooks under notebooks/  -- NOT here.
+#
+#   ./run.sh                 # steps 00-03
+#   ./run.sh 01              # only download
+#   PYTHON=../v1/.venv/bin/python ./run.sh
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -19,8 +24,8 @@ else
     PY="python3"
 fi
 
-ALL=(00_make_manifest 01_download_geo_supplement 02_extract_archives \
-     03_load_to_anndata 04_inspect_anndata_columns 05_curate_and_save_h5ad)
+ALL=(00_validate_manifest 01_download_geo_supplement 02_extract_archives \
+     03_list_downloaded_files)
 
 if [[ $# -eq 0 ]]; then
     STEPS=("${ALL[@]}")
@@ -43,4 +48,4 @@ for s in "${STEPS[@]}"; do
     "$PY" "scripts/${s}.py"
 done
 echo
-echo "done. (step 06_read_saved_h5ad_template.py is a template; run manually)"
+echo "download/extract done. Continue in notebooks/python/ (start with 00_overview.ipynb)."
