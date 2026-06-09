@@ -1,7 +1,6 @@
-"""GEO supplementary file download (resumable, skip-complete).
+"""GEO supplementary ファイルのダウンロード（レジューム対応・完了済みはスキップ）。
 
-Archive extraction lives in archive_utils.py. Only the Python stdlib + tqdm
-are used (no `requests` dependency).
+アーカイブ展開は archive_utils.py 側。requests は使わず標準ライブラリ + tqdm のみ。
 """
 from __future__ import annotations
 
@@ -23,6 +22,7 @@ _UA = "Mozilla/5.0 (compatible; geo-pipeline/1.0)"
 
 
 def _remote_size(url: str) -> int | None:
+    # HEAD で Content-Length を取得（取れなければ None）
     try:
         req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": _UA})
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
@@ -33,17 +33,16 @@ def _remote_size(url: str) -> int | None:
 
 
 def download_file(url: str, dest, *, resume: bool = True, force: bool = False) -> Path:
-    """Download `url` to `dest`. Resumes a partial `.part` file when possible,
-    skips when `dest` already exists and matches the remote size."""
+    """url を dest に保存。`.part` があれば Range で続きから、既存かつサイズ一致ならスキップ。"""
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     if dest.exists() and not force:
         remote = _remote_size(url)
         if remote is None or dest.stat().st_size == remote:
-            log.info("skip existing %s", dest.name)
+            log.info("既存のためスキップ %s", dest.name)
             return dest
-        log.warning("size mismatch %s (local=%d remote=%d); re-downloading",
+        log.warning("サイズ不一致 %s (local=%d remote=%d); 取り直します",
                     dest.name, dest.stat().st_size, remote)
 
     part = dest.with_name(dest.name + ".part")
@@ -57,10 +56,10 @@ def download_file(url: str, dest, *, resume: bool = True, force: bool = False) -
         resp = urllib.request.urlopen(
             urllib.request.Request(url, headers=headers), timeout=_TIMEOUT)
     except urllib.error.HTTPError as exc:
-        if exc.code == 416:  # already complete
+        if exc.code == 416:  # Range 不可 = 既に完了
             part.replace(dest)
             return dest
-        log.warning("range request failed (%s); restarting %s", exc, dest.name)
+        log.warning("Range 取得に失敗 (%s); %s を最初から取り直し", exc, dest.name)
         existing = 0
         if part.exists():
             part.unlink()
@@ -94,12 +93,12 @@ def download_file(url: str, dest, *, resume: bool = True, force: bool = False) -
         resp.close()
 
     part.replace(dest)
-    log.info("downloaded %s (%d bytes)", dest.name, dest.stat().st_size)
+    log.info("ダウンロード完了 %s (%d bytes)", dest.name, dest.stat().st_size)
     return dest
 
 
 def download_files(file_entries, dest_dir, *, force: bool = False) -> list:
-    """Download a list of manifest file entries into dest_dir."""
+    """manifest の files リストを dest_dir にまとめてダウンロード。"""
     dest_dir = Path(dest_dir)
     out = []
     for entry in file_entries:
@@ -108,7 +107,7 @@ def download_files(file_entries, dest_dir, *, force: bool = False) -> list:
             out.append(download_file(url, dest_dir / name, force=force))
         except Exception as exc:
             if entry.get("optional"):
-                log.warning("optional file failed, continuing: %s (%s)", name, exc)
+                log.warning("optional ファイルの失敗を無視して継続: %s (%s)", name, exc)
                 continue
-            raise RuntimeError(f"download failed for {name} <- {url}: {exc}") from exc
+            raise RuntimeError(f"ダウンロード失敗 {name} <- {url}: {exc}") from exc
     return out

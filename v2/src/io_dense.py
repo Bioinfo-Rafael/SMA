@@ -1,9 +1,9 @@
-"""Dense / text / combined-table / processed / nested loaders for notebooks,
-plus the reader for R-exported intermediates (GSE295514).
+"""ノートブック用の dense/text/結合テーブル/処理済み/ネスト tar ローダーと、
+R が書き出した中間ファイル（GSE295514）の読み込み。
 
-Orientation policy: text matrices are assumed gene x cell and transposed to
-cell x gene; the observed shape and head rows/cols are stashed in
-adata.uns['orientation_report::<file>'] for the human to confirm.
+向きの方針：テキスト行列は「行=遺伝子・列=細胞」と仮定して cells x genes に転置する。
+ただし観測した shape と先頭行/列を adata.uns['orientation_report::<file>'] に残し、
+人間が確認できるようにする。
 """
 from __future__ import annotations
 
@@ -31,6 +31,7 @@ def _open_text(path: Path):
 
 
 def _sep_for(path) -> str:
+    # .csv はカンマ、それ以外はタブ区切りとみなす
     return "," if ".csv" in Path(path).name.lower() else "\t"
 
 
@@ -47,11 +48,10 @@ def _base_obs(barcodes, ds, *, sample_id, sample_label, gsm_id, source_file):
 
 
 # --------------------------------------------------------------------------
-# generic dense reader
+# 汎用 dense リーダー
 # --------------------------------------------------------------------------
 def read_dense_gene_by_cell_matrix(path):
-    """Read a dense matrix (rows=genes, cols=cells) -> (X cells x genes csr,
-    genes, cells, orientation_report)."""
+    """dense 行列（行=遺伝子・列=細胞）を読み、(X cells x genes, genes, cells, 向きレポート) を返す。"""
     sep = _sep_for(path)
     df = pd.read_csv(path, sep=sep, index_col=0)
     report = {"file": Path(path).name, "raw_shape_rows_x_cols": list(df.shape),
@@ -89,11 +89,12 @@ def _text_matrix_files(extracted: Path):
 
 
 def load_dense_or_text_matrix_bundle(ds, paths, logger=log):
+    """サンプルごとの dense テキスト行列を全部読み、結合して返す。"""
     extracted = mf.dataset_extracted_dir(paths, ds)
     files = _text_matrix_files(extracted)
-    logger.info("[%s] %d text-matrix files", ds["dataset_id"], len(files))
+    logger.info("[%s] テキスト行列 %d 個", ds["dataset_id"], len(files))
     if not files:
-        raise RuntimeError(f"no text matrices for {ds['dataset_id']} in {extracted}")
+        raise RuntimeError(f"{ds['dataset_id']} のテキスト行列が {extracted} にありません")
     parts = []
     for path in files:
         meta = au.parse_geo_filename(path.name)
@@ -106,6 +107,7 @@ def load_dense_or_text_matrix_bundle(ds, paths, logger=log):
 # mtx_or_text_bundle  (GSE167327)
 # --------------------------------------------------------------------------
 def report_side_table(path, ds, paths, logger=log, n_lines: int = 50):
+    """小さい付随テキスト（行列とは限らない）の先頭をレポートに書き出す。"""
     out = Path(paths["reports"]) / f"{ds['dataset_id']}_side_table_{Path(path).name}.txt"
     out.parent.mkdir(parents=True, exist_ok=True)
     lines = [f"side table: {path}", ""]
@@ -113,17 +115,18 @@ def report_side_table(path, ds, paths, logger=log, n_lines: int = 50):
         with _open_text(path) as fh:
             for i, line in enumerate(fh):
                 if i >= n_lines:
-                    lines.append(f"... (truncated at {n_lines} lines)")
+                    lines.append(f"... ({n_lines} 行で打ち切り)")
                     break
                 lines.append(line.rstrip("\n"))
     except Exception as exc:  # pragma: no cover
         lines.append(f"ERROR: {exc}")
     out.write_text("\n".join(lines))
-    logger.info("[%s] side-table report -> %s", ds["dataset_id"], out)
+    logger.info("[%s] 付随テーブルのレポート -> %s", ds["dataset_id"], out)
     return out
 
 
 def load_mtx_or_text_bundle(ds, paths, logger=log):
+    """MTX があれば MTX、無ければ dense テキストとして読む。付随テキストはレポート。"""
     extracted = mf.dataset_extracted_dir(paths, ds)
     side = ds.get("side_table")
     if side:
@@ -135,9 +138,9 @@ def load_mtx_or_text_bundle(ds, paths, logger=log):
     complete = {k: v for k, v in groups.items()
                 if {"mtx", "barcodes", "features"}.issubset(v)}
     if complete:
-        logger.info("[%s] %d MTX triplets", ds["dataset_id"], len(complete))
+        logger.info("[%s] MTX 三点セット %d 個", ds["dataset_id"], len(complete))
         return io_10x.load_10x_mtx_per_sample(ds, paths, logger)
-    logger.info("[%s] no MTX triplets; falling back to dense text", ds["dataset_id"])
+    logger.info("[%s] MTX 無し。dense テキストで読みます", ds["dataset_id"])
     return load_dense_or_text_matrix_bundle(ds, paths, logger)
 
 
@@ -145,13 +148,14 @@ def load_mtx_or_text_bundle(ds, paths, logger=log):
 # dense_gene_by_cell_matrix  (GSE167331, TPM)
 # --------------------------------------------------------------------------
 def load_dense_gene_by_cell_matrix(ds, paths, logger=log):
+    """1枚の dense 行列（TPM 等）を読む。data_status は manifest 側の宣言に従う。"""
     raw_dir = mf.dataset_raw_dir(paths, ds)
     fname = ds.get("matrix_file") or ds["files"][0]["name"]
     path = raw_dir / fname
     if not path.exists():
-        raise RuntimeError(f"matrix file missing for {ds['dataset_id']}: {path}")
+        raise RuntimeError(f"{ds['dataset_id']} の行列ファイルがありません: {path}")
     a = _anndata_from_dense(path, ds, sample_label=ds["source_accession"], gsm_id=au.UNKNOWN)
-    logger.info("[%s] matrix loaded: %d cells x %d genes (data_status hint=%s)",
+    logger.info("[%s] 行列ロード: %d cells x %d genes (data_status hint=%s)",
                 ds["dataset_id"], a.n_obs, a.n_vars, ds.get("data_status"))
     return a
 
@@ -164,13 +168,14 @@ def _read_table(path, index_col=0):
 
 
 def read_combined_umi_with_metadata(ds, paths, logger=log):
+    """結合 UMI テーブル（genes x cells）を転置し、付随メタデータを obs に join。"""
     raw_dir = mf.dataset_raw_dir(paths, ds)
     matrix_file = ds.get("matrix_file") or "GSE173524_umi.tsv.gz"
     mpath = raw_dir / matrix_file
     if not mpath.exists():
-        raise RuntimeError(f"UMI table missing for {ds['dataset_id']}: {mpath}")
+        raise RuntimeError(f"{ds['dataset_id']} の UMI テーブルがありません: {mpath}")
 
-    logger.info("[%s] reading %s (genes x cells -> transpose)", ds["dataset_id"], matrix_file)
+    logger.info("[%s] %s を読み込み（genes x cells -> 転置）", ds["dataset_id"], matrix_file)
     df = _read_table(mpath)                                   # genes x cells
     genes = [str(x) for x in df.index]
     cells = [str(x) for x in df.columns]
@@ -185,16 +190,16 @@ def read_combined_umi_with_metadata(ds, paths, logger=log):
     for entry in ds.get("metadata_files", []) or []:
         mp = raw_dir / entry["name"]
         if not mp.exists():
-            logger.warning("  metadata file missing: %s", mp)
+            logger.warning("  メタデータ欠落: %s", mp)
             continue
-        meta = _read_table(mp).add_prefix("meta_")
+        meta = _read_table(mp).add_prefix("meta_")            # 元メタは meta_ 接頭辞で保持
         if entry.get("role") == "per_cell":
             meta.index = meta.index.astype(str)
             a.obs = a.obs.join(meta, how="left").loc[a.obs_names]
-            logger.info("  joined per-cell metadata %s (%d cols)", entry["name"], meta.shape[1])
+            logger.info("  細胞メタを join %s (%d 列)", entry["name"], meta.shape[1])
         else:
             a.uns[f"sample_metadata::{entry['name']}"] = meta.reset_index().astype(str).to_dict("list")
-            logger.info("  stashed per-sample metadata %s in uns", entry["name"])
+            logger.info("  サンプルメタを uns に格納 %s", entry["name"])
     return a
 
 
@@ -202,13 +207,14 @@ def read_combined_umi_with_metadata(ds, paths, logger=log):
 # processed_count_matrix_with_metadata  (GSE206330, SoupX)
 # --------------------------------------------------------------------------
 def load_processed_count_matrix_with_metadata(ds, paths, logger=log):
+    """処理済み行列（SoupX 補正）+ メタデータ CSV を読み、obs に join。"""
     raw_dir = mf.dataset_raw_dir(paths, ds)
     matrix_file = ds.get("matrix_file") or ds["files"][0]["name"]
     mpath = raw_dir / matrix_file
     if not mpath.exists():
-        raise RuntimeError(f"processed matrix missing for {ds['dataset_id']}: {mpath}")
+        raise RuntimeError(f"{ds['dataset_id']} の処理済み行列がありません: {mpath}")
 
-    logger.info("[%s] reading processed matrix %s", ds["dataset_id"], matrix_file)
+    logger.info("[%s] 処理済み行列 %s を読み込み", ds["dataset_id"], matrix_file)
     X, genes, cells, report = read_dense_gene_by_cell_matrix(mpath)
     a = ad.AnnData(X=X)
     a.obs_names = pd.Index(cells)
@@ -222,12 +228,12 @@ def load_processed_count_matrix_with_metadata(ds, paths, logger=log):
     for entry in ds.get("metadata_files", []) or []:
         mp = raw_dir / entry["name"]
         if not mp.exists():
-            logger.warning("  metadata file missing: %s", mp)
+            logger.warning("  メタデータ欠落: %s", mp)
             continue
         meta = _read_table(mp).add_prefix("meta_")
         meta.index = meta.index.astype(str)
         a.obs = a.obs.join(meta, how="left").loc[a.obs_names]
-        logger.info("  joined metadata %s (%d cols)", entry["name"], meta.shape[1])
+        logger.info("  メタを join %s (%d 列)", entry["name"], meta.shape[1])
     return a
 
 
@@ -235,6 +241,7 @@ def load_processed_count_matrix_with_metadata(ds, paths, logger=log):
 # nested_tar_dropseq  (GSE178693)
 # --------------------------------------------------------------------------
 def load_nested_tar_dropseq(ds, paths, logger=log):
+    """ネスト展開済みの中身を MTX 優先で探し、無ければ dense テキストで読む。形式はレポート。"""
     extracted = mf.dataset_extracted_dir(paths, ds)
     groups = io_10x.group_mtx_triplets(extracted)
     complete = {k: v for k, v in groups.items()
@@ -247,7 +254,7 @@ def load_nested_tar_dropseq(ds, paths, logger=log):
         f"dataset: {ds['dataset_id']}\nextracted: {extracted}\n"
         f"mtx_triplets: {len(complete)}\ntext_matrices: {len(text_files)}\nfiles:\n"
         + "\n".join(f"  {p.relative_to(extracted)}" for p in find_files(extracted)))
-    logger.info("[%s] nested formats: mtx=%d text=%d (report -> %s)",
+    logger.info("[%s] 形式: mtx=%d text=%d (レポート -> %s)",
                 ds["dataset_id"], len(complete), len(text_files), report)
 
     parts = []
@@ -265,24 +272,24 @@ def load_nested_tar_dropseq(ds, paths, logger=log):
                 parts.append(_anndata_from_dense(path, ds, sample_label=meta["sample_label"],
                                                  gsm_id=meta["gsm_id"]))
             except Exception as exc:
-                logger.warning("  could not read %s: %s", path.name, exc)
+                logger.warning("  %s を読めませんでした: %s", path.name, exc)
     if not parts:
-        raise RuntimeError(f"no readable matrices for {ds['dataset_id']}; see {report}")
+        raise RuntimeError(f"{ds['dataset_id']} で読める行列がありません; {report} を参照")
     return io_10x._concat(parts, ds["source_accession"])
 
 
 # --------------------------------------------------------------------------
-# R intermediate reader  (GSE295514, after the R notebook)
+# R 中間ファイルの読み込み  (GSE295514, R ノートブックの後)
 # --------------------------------------------------------------------------
 def read_from_r_intermediate(directory, ds, logger=log):
-    """Assemble AnnData from files exported by notebooks/R/01_GSE295514_read_rds.ipynb:
-    counts.mtx (genes x cells), barcodes.csv, genes.csv, metadata.csv."""
+    """notebooks/R/01_GSE295514_read_rds.ipynb が書き出した
+    counts.mtx(genes x cells) / barcodes.csv / genes.csv / metadata.csv から AnnData を組む。"""
     directory = Path(directory)
     mtx = next((directory / n for n in ("counts.mtx.gz", "counts.mtx") if (directory / n).exists()), None)
     if mtx is None:
         raise RuntimeError(
-            f"R intermediate counts.mtx not found in {directory}; "
-            "run notebooks/R/01_GSE295514_read_rds.ipynb first")
+            f"R 中間ファイル counts.mtx が {directory} にありません; "
+            "先に notebooks/R/01_GSE295514_read_rds.ipynb を実行してください")
     matrix = scipy.io.mmread(str(mtx)).tocsr()                # genes x cells
     genes = pd.read_csv(directory / "genes.csv")
     barcodes = pd.read_csv(directory / "barcodes.csv")
@@ -301,5 +308,5 @@ def read_from_r_intermediate(directory, ds, logger=log):
         meta = pd.read_csv(meta_path, index_col=0).add_prefix("meta_")
         meta.index = meta.index.astype(str)
         a.obs = a.obs.join(meta, how="left").loc[a.obs_names]
-        logger.info("[%s] joined R meta.data (%d cols)", ds["dataset_id"], meta.shape[1])
+        logger.info("[%s] R の meta.data を join (%d 列)", ds["dataset_id"], meta.shape[1])
     return a

@@ -1,145 +1,132 @@
 # SMA / ALS scRNA-seq preprocessing (v2)
 
-**download scripts + interactive notebooks.**
+**download スクリプト + 対話的ノートブック** 構成。
 
-The `.py` scripts only fetch and organise GEO **Supplementary files** (download
-→ extract → list). Everything else — reading data into AnnData, inspecting
-obs/var, curating metadata, saving per-GSE h5ad, and merging — happens in
-**Jupyter notebooks**, so a human stays in the loop and decides cell-type /
-cluster / condition columns. Nothing is auto-detected.
+`.py` スクリプトは GEO **Supplementary files** の取得・整理（download → extract →
+list → overview）まで。それ以降（AnnData 化・obs/var 確認・metadata 整形・前処理段階の
+診断・per-GSE h5ad 保存・merge）はすべて **Jupyter ノートブック**で行い、cell type /
+cluster / condition 列は人間が判断する（自動判定しない）。
 
-## What runs where
+> コード内のコメント・docstring は日本語。関数定義は `src/`、実行単位はノートブック。
 
-| Stage | Where |
+## どこで何をするか
+
+| 段階 | 場所 |
 |---|---|
-| validate manifest, download, extract, list files | `.py` scripts (`scripts/`) |
-| load files → AnnData | notebook `python/01` |
-| inspect obs/var/layers/uns | notebook `python/02` |
-| curate metadata (manual) | notebook `python/03` |
-| save per-GSE curated h5ad | notebook `python/03` |
-| merge curated h5ad → merged h5ad | notebook `python/04` |
-| check merged h5ad | notebook `python/05` |
-| open & export the RDS dataset | **R** notebook `R/01_GSE295514_read_rds.ipynb` |
+| manifest 検証 / download / extract / list / overview | `.py`（`scripts/`） |
+| ファイル → AnnData 化 ＋ その場で確認 | notebook `python/01` |
+| metadata 整形（GSEごと・名寄せ履歴を記録/CSV出力） | notebook `python/02` |
+| per-GSE curated h5ad 保存 | notebook `python/02` |
+| 前処理段階の診断（統計量・分布で推定。揃えない） | notebook `python/03` |
+| curated h5ad の merge（`ad.concat` ネイティブ） | notebook `python/04` |
+| merged h5ad の確認 | notebook `python/05` |
+| RDS を開いて中間ファイル出力 | **R** notebook `R/01_GSE295514_read_rds.ipynb` |
 
-> Helper *functions* live in `src/`; the *execution unit* is the notebook.
-> There is **no** `03_load`/`04_inspect`/`05_curate` script and `run.sh` stops
-> after the download/extract/list steps.
+## データ上の注意
 
-## Key data caveats
+* **GSE242942** → scRNA-seq SubSeries **`GSE242939`** のみ使用。bulk の **`GSE242940` は不使用**。
+* **GSE167332** → 3 SubSeries を**別々の h5ad** として保存：`GSE167198`（Drop-seq 全脊髄）、
+  `GSE167327`（CD45 enriched, inDrop）、`GSE167331`（FACS microglia, SmartSeq2）。
+* **GSE167331** は **TPM** → `data_status = processed_TPM`。生カウントと混ぜない。
+* **GSE206330** は **SoupX 補正済み** → `data_status = processed_SoupX_corrected`。生カウントと別扱い。
+* **GSE295514** は **RDS**：R kernel で開いて中間ファイルを出力 →
+  `data_status = RDS_converted_unknown_or_counts`。
+* **GSE173524** は生の `GSE173524_umi.tsv.gz` を使用（`*.sctransform.*` は不使用）。
+* merge は `data/merged_h5ad/` に保存。**status-aware**：`raw_or_filtered_count` のみの merge と、
+  全部を `data_status` 付きで残す merge の2種類。
 
-* **GSE242942** → use only the scRNA-seq SubSeries **`GSE242939`**; the bulk
-  RNA-seq SubSeries **`GSE242940` is not used**.
-* **GSE167332** → 3 SubSeries are **all included but saved as separate h5ad**:
-  `GSE167198` (Drop-seq whole cord), `GSE167327` (CD45-enriched, inDrop),
-  `GSE167331` (FACS microglia, SmartSeq2).
-* **GSE167331** is a **TPM** matrix → `data_status = processed_TPM`; never pooled
-  with raw counts.
-* **GSE206330** is **SoupX corrected** processed data →
-  `data_status = processed_SoupX_corrected`; kept separate from raw counts.
-* **GSE295514** is an **RDS** object: open it in the R Jupyter kernel, inspect,
-  and export intermediates that the Python notebook reads
-  (`data_status = RDS_converted_unknown_or_counts`).
-* **GSE173524** uses the raw `GSE173524_umi.tsv.gz`, not the `*.sctransform.*`
-  (normalised) version.
-* Merged h5ad files are written to `data/merged_h5ad/`. Merges are
-  **status-aware**: one merge of only `raw_or_filtered_count` datasets, and one
-  of everything with `data_status` preserved in obs.
-
-## Layout
+## 構成
 
 ```
 v2/
-├── config/dataset_manifest.yaml      # SOURCE OF TRUTH (GSE/files/URLs/loader_hint/metadata)
-├── scripts/
+├── config/dataset_manifest.yaml      # 真実の情報源（GSE/files/URL/loader_hint/metadata）
+├── scripts/                          # download/extract まで（.py）
 │   ├── 00_validate_manifest.py
 │   ├── 01_download_geo_supplement.py
-│   ├── 02_extract_archives.py        # safe (path-traversal) + nested tars
-│   └── 03_list_downloaded_files.py
-├── src/                              # functions used BY the notebooks
-│   ├── geo_download.py               # resumable download
-│   ├── archive_utils.py              # safe tar extraction + find_files
-│   ├── manifest_utils.py             # load/validate manifest, paths, logging
-│   ├── io_10x.py                     # read_10x_h5_file / read_10x_mtx_triplet / loaders
-│   ├── io_dense.py                   # dense/combined/processed/nested + R-intermediate reader
-│   ├── anndata_utils.py              # obs/var schema, obs_names, save/load, merge
-│   └── notebook_report_utils.py      # summarize_adata / show_* helpers
+│   ├── 02_extract_archives.py        # 安全展開（パストラバーサル対策）+ ネスト tar
+│   ├── 03_list_downloaded_files.py
+│   └── 04_overview.py                # 俯瞰（旧 00_overview ノートブックをスクリプト化）
+├── src/                              # ノートブックから呼ぶ関数群
+│   ├── geo_download.py               # レジューム付きダウンロード
+│   ├── archive_utils.py              # 安全な tar 展開 + find_files
+│   ├── manifest_utils.py             # manifest 読込/検証・パス・ロガー
+│   ├── io_10x.py                     # 10x .h5 / MTX 三点セット ローダー
+│   ├── io_dense.py                   # dense/結合/処理済み/ネスト + R 中間ファイル読込
+│   ├── anndata_utils.py              # obs/var スキーマ・obs_names・保存/一括ロード
+│   └── notebook_report_utils.py      # summarize/show_* + 前処理診断 + CurationLog
 ├── notebooks/
 │   ├── python/
-│   │   ├── 00_overview.ipynb
-│   │   ├── 01_load_each_gse_to_anndata.ipynb
-│   │   ├── 02_inspect_each_gse_anndata.ipynb
-│   │   ├── 03_curate_each_gse_and_save_h5ad.ipynb
+│   │   ├── 01_load_and_inspect_each_gse.ipynb
+│   │   ├── 02_curate_each_gse_and_save_h5ad.ipynb
+│   │   ├── 03_inspect_preprocessing_state.ipynb
 │   │   ├── 04_merge_curated_h5ad.ipynb
 │   │   └── 05_check_merged_h5ad.ipynb
 │   └── R/
 │       └── 01_GSE295514_read_rds.ipynb
-├── data/                             # git-ignored; created on first run
-│   ├── raw/<acc>/                    # downloaded supplementary files
-│   ├── extracted/<acc>/              # unpacked archives
-│   ├── intermediate_from_r/<acc>/    # R notebook exports (counts.mtx, metadata.csv, ...)
-│   ├── interim_h5ad/                 # optional raw AnnData (notebook 01)
-│   ├── curated_h5ad/                 # notebook 03 output
-│   ├── merged_h5ad/                  # notebook 04 output
-│   └── reports/                      # manifest overview, file lists, side tables
+├── data/                             # git 管理外。初回実行で作成
+│   ├── raw/<acc>/                    # ダウンロードした supplementary
+│   ├── extracted/<acc>/              # 展開済み
+│   ├── intermediate_from_r/<acc>/    # R ノートブックの出力（counts.mtx 等）
+│   ├── interim_h5ad/                 # 生 AnnData（notebook 01 で保存）
+│   ├── curated_h5ad/                 # notebook 02 の出力
+│   ├── merged_h5ad/                  # notebook 04 の出力
+│   └── reports/                      # manifest 一覧・ファイル一覧・名寄せ履歴 等
 ├── requirements.txt
-└── run.sh                            # download/extract/list ONLY
+└── run.sh                            # download/extract/list/overview のみ
 ```
 
-## Usage
+## 使い方
 
-### 1. Python environment
+### 1. Python 環境
 
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
-python -m ipykernel install --user --name sma-v2   # optional: named kernel
-# (or reuse the v1 env:  PYTHON=../v1/.venv/bin/python ./run.sh)
+python -m ipykernel install --user --name sma-v2   # 任意：名前付きカーネル
+# （v1 の venv を流用する場合：PYTHON=../v1/.venv/bin/python ./run.sh）
 ```
 
-### 2. Download + extract (scripts)
+### 2. ダウンロード + 展開（スクリプト）
 
 ```bash
 python scripts/00_validate_manifest.py
-python scripts/01_download_geo_supplement.py        # resumable; --datasets GSE208629 to limit
+python scripts/01_download_geo_supplement.py        # レジューム。--datasets GSE208629 で限定
 python scripts/02_extract_archives.py
 python scripts/03_list_downloaded_files.py
-# or simply:  ./run.sh
+python scripts/04_overview.py
+# まとめて：  ./run.sh
 ```
 
-### 3. AnnData onwards (notebooks)
+### 3. AnnData 以降（ノートブック）
 
-Open JupyterLab and work through `notebooks/python/` in order:
-`00_overview` → `01_load…` → `02_inspect…` → `03_curate…` → `04_merge…` →
-`05_check…`. For **GSE295514**, first run the **R** notebook
-`notebooks/R/01_GSE295514_read_rds.ipynb`, then load it in `python/01`.
+JupyterLab で `notebooks/python/` を順に：
+`01_load_and_inspect` → `02_curate` → `03_inspect_preprocessing_state` →
+`04_merge` → `05_check`。**GSE295514** は先に R ノートブック
+`notebooks/R/01_GSE295514_read_rds.ipynb` を実行してから `python/01` で読み込む。
 
 ```bash
 jupyter lab
 ```
 
-## R notebook (GSE295514 RDS)
+## R ノートブック（GSE295514 RDS）
 
-`notebooks/R/01_GSE295514_read_rds.ipynb` runs on an **R Jupyter kernel**. It
-reads the RDS, inspects class/assays/`meta.data`, and exports
-`counts.mtx` / `metadata.csv` / `genes.csv` / `barcodes.csv` to
-`data/intermediate_from_r/GSE295514/`, which `io_dense.read_from_r_intermediate`
-turns into AnnData.
+`notebooks/R/01_GSE295514_read_rds.ipynb` は **R Jupyter kernel** 上で動く。RDS を読み、
+class/assays/`meta.data` を確認し、`counts.mtx` / `metadata.csv` / `genes.csv` /
+`barcodes.csv` を `data/intermediate_from_r/GSE295514/` に書き出す。Python 側は
+`io_dense.read_from_r_intermediate` でこれを AnnData 化する。
 
-R packages that may be needed (install yourself in R; not auto-installed):
+R 側で必要になりうるもの（R 内で各自インストール。自動 install はしない）：
 
 ```r
-install.packages("IRkernel"); IRkernel::installspec()   # R kernel for Jupyter
+install.packages("IRkernel"); IRkernel::installspec()   # Jupyter 用 R kernel
 install.packages("Matrix")
-# plus, depending on the object:
-install.packages("Seurat")              # also pulls SeuratObject
-# or (Bioconductor):
+install.packages("Seurat")              # SeuratObject も入る
 # BiocManager::install("SingleCellExperiment")
-# optional bridges: zellkonverter, Matrix.utils
+# 任意: zellkonverter, Matrix.utils
 ```
 
-## Scope
+## スコープ
 
-This stage covers **download, AnnData creation, manual inspection, curation,
-per-GSE h5ad saving, and merged h5ad saving** only. Analysis, QC, normalization,
-clustering, UMAP, scVI and batch correction are intentionally **not** included
-yet.
+今回は **download / AnnData 化 / 手動確認 / 前処理段階の診断 / 整形 / per-GSE h5ad 保存 /
+merged h5ad 保存** まで。解析・QC・正規化・クラスタリング・UMAP・scVI・batch correction は
+**まだ含めない**。

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""00_validate_manifest.py -- validate config/dataset_manifest.yaml and write a
-flat overview table (data/reports/manifest_overview.csv).
+"""00_validate_manifest.py -- config/dataset_manifest.yaml を検証し、
+一覧表を data/reports/manifest_overview.csv に書き出す。
 """
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ log = mf.get_logger("00_validate")
 
 
 def overview(manifest: dict) -> pd.DataFrame:
+    """manifest を1行1データセットの表に整形。"""
     rows = []
     for ds in mf.list_datasets(manifest):
         rows.append({
@@ -37,13 +38,13 @@ def overview(manifest: dict) -> pd.DataFrame:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--manifest", default=str(ROOT / "config" / "dataset_manifest.yaml"))
-    ap.add_argument("--strict", action="store_true")
+    ap.add_argument("--strict", action="store_true", help="エラー時に非0終了")
     args = ap.parse_args()
 
     paths = mf.project_paths(ROOT)
     mf.ensure_dirs(paths)
     manifest = mf.load_manifest(Path(args.manifest))
-    log.info("loaded %d datasets", len(mf.list_datasets(manifest)))
+    log.info("%d データセットを読み込み", len(mf.list_datasets(manifest)))
 
     errors = mf.validate_manifest(manifest)
     for e in errors:
@@ -52,11 +53,11 @@ def main() -> int:
     df = overview(manifest)
     out = Path(paths["reports"]) / "manifest_overview.csv"
     df.to_csv(out, index=False)
-    log.info("wrote overview -> %s", out)
+    log.info("一覧を書き出し -> %s", out)
     print(df.to_string(index=False))
 
     if errors:
-        log.error("%d validation error(s)", len(errors))
+        log.error("検証エラー %d 件", len(errors))
         return 1 if args.strict else 0
     log.info("manifest OK")
     return 0

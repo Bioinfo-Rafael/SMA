@@ -1,9 +1,11 @@
-"""AnnData helpers shared by the notebooks: standard obs/var schema, unique
-obs_names, h5ad save/load collection, and a status-aware merge.
+"""ノートブックで共通利用する AnnData ヘルパー。
 
-These are *functions to call from notebooks*, not an execution pipeline.
-Raw counts go into adata.X; processed status (TPM / SoupX / RDS) is recorded
-in adata.obs['data_status'] and adata.uns['data_status'] by the notebook.
+標準 obs/var スキーマの付与、obs_names の一意化、h5ad の保存/一括ロードなど。
+merge は anndata.concat をそのまま使えばよいので、ここでは薄い補助のみ置く
+（notebooks/python/04 は ad.concat を直接呼ぶ）。
+
+生カウントは adata.X に入れる。TPM / SoupX / RDS などの処理状態は
+obs['data_status'] / uns['data_status'] にノートブック側で明示する。
 """
 from __future__ import annotations
 
@@ -20,7 +22,7 @@ log = logging.getLogger("anndata_utils")
 
 UNKNOWN = "unknown"
 
-# Standard obs schema (notebook 03 fills these; unknown is acceptable).
+# 標準 obs スキーマ（notebook 03 で埋める。unknown のままでも可）
 REQUIRED_OBS_COLS = [
     "cell_id_original", "cell_id", "sample_id", "sample_label",
     "source_accession", "parent_gse", "dataset_id", "species", "disease_area",
@@ -34,7 +36,7 @@ REQUIRED_VAR_COLS = [
 
 
 # --------------------------------------------------------------------------
-# file-name parsing (mechanical sample id from GEO file names)
+# ファイル名のパース（GEO ファイル名から機械的に sample id を取り出す）
 # --------------------------------------------------------------------------
 _MATRIX_SUFFIX_RE = re.compile(
     r"[_.]?(filtered_feature_bc_matrix\.h5|raw_feature_bc_matrix\.h5|"
@@ -53,10 +55,12 @@ _KIND_SUFFIXES = [
 
 
 def sanitize_id(text: str) -> str:
+    """id に使える文字だけ残す。"""
     return re.sub(r"[^A-Za-z0-9]+", "-", str(text)).strip("-") or UNKNOWN
 
 
 def parse_geo_filename(fname: str) -> dict:
+    """GEO のファイル名から GSM id・種別(kind)・サンプル prefix を取り出す。"""
     base = Path(fname).name
     low = base.lower()
     gsm = None
@@ -68,18 +72,17 @@ def parse_geo_filename(fname: str) -> dict:
         if low.endswith(suf):
             kind = k
             break
-    prefix = _MATRIX_SUFFIX_RE.sub("", base)
+    prefix = _MATRIX_SUFFIX_RE.sub("", base)               # 三点セットを束ねる用
     sample_label = re.sub(r"^GSM\d+[_.\-]?", "", prefix) or prefix
     return {"file": base, "gsm_id": gsm or UNKNOWN, "kind": kind,
             "prefix": prefix, "sample_label": sample_label}
 
 
 # --------------------------------------------------------------------------
-# obs / var schema
+# obs / var スキーマ
 # --------------------------------------------------------------------------
 def ensure_standard_obs_columns(adata, defaults: dict | None = None):
-    """Add any missing standard obs columns (filled with 'unknown' or the
-    given defaults). Never drops existing columns."""
+    """欠けている標準 obs 列を追加（unknown もしくは defaults で埋める）。既存列は消さない。"""
     defaults = defaults or {}
     if "cell_id_original" not in adata.obs.columns:
         adata.obs["cell_id_original"] = adata.obs_names.astype(str)
@@ -95,8 +98,8 @@ def ensure_standard_obs_columns(adata, defaults: dict | None = None):
 
 def ensure_standard_var_columns(adata, *, gene_symbol=None, gene_id=None,
                                 ensembl_id=None, feature_type=None):
-    """Ensure gene_id / gene_symbol / gene_symbol_upper / ensembl_id /
-    feature_type exist. Missing pieces fall back to var_names / 'unknown'."""
+    """gene_id / gene_symbol / gene_symbol_upper / ensembl_id / feature_type を整える。
+    与えられなければ var_names / 'unknown' で補完。"""
     n = adata.n_vars
     if gene_symbol is None:
         gene_symbol = (adata.var["gene_symbol"].to_numpy()
@@ -121,40 +124,42 @@ def ensure_standard_var_columns(adata, *, gene_symbol=None, gene_id=None,
 
 
 def make_obs_names_unique(adata, prefix: str | None = None):
-    """Make obs_names globally unique. With `prefix` (e.g. source_accession),
-    names become {prefix}_{sample_id}_{original}; otherwise just made unique."""
+    """obs_names を全体で一意化する。prefix を渡すと
+    {prefix}_{sample_id}_{元バーコード} 形式にしてから一意化する。"""
     if "cell_id_original" not in adata.obs.columns:
         adata.obs["cell_id_original"] = adata.obs_names.astype(str)
     if prefix is not None:
         sid = (adata.obs["sample_id"].astype(str)
                if "sample_id" in adata.obs.columns else pd.Series([UNKNOWN] * adata.n_obs))
         orig = adata.obs["cell_id_original"].astype(str)
-        adata.obs_names = pd.Index(
-            [f"{prefix}_{s}_{b}" for s, b in zip(sid, orig)])
+        adata.obs_names = pd.Index([f"{prefix}_{s}_{b}" for s, b in zip(sid, orig)])
     adata.obs_names_make_unique()
     adata.obs["cell_id"] = adata.obs_names.astype(str)
     return adata
 
 
 def to_csr(adata):
+    """X を CSR sparse に揃える。"""
     if not sp.isspmatrix_csr(adata.X):
         adata.X = sp.csr_matrix(adata.X)
     return adata
 
 
 # --------------------------------------------------------------------------
-# save / load
+# 保存 / ロード
 # --------------------------------------------------------------------------
 def _stringify_object_cols(df: pd.DataFrame) -> None:
+    # h5ad 保存時に object dtype が原因で落ちないよう str に寄せる
     for col in df.columns:
         if df[col].dtype == object:
             df[col] = df[col].astype(str)
 
 
 def save_h5ad(adata, path, *, overwrite: bool = True, sparse: bool = True):
+    """h5ad を保存（overwrite=False なら既存はスキップ）。"""
     path = Path(path)
     if path.exists() and not overwrite:
-        log.info("skip existing %s", path.name)
+        log.info("既存のためスキップ %s", path.name)
         return path
     path.parent.mkdir(parents=True, exist_ok=True)
     if sparse:
@@ -162,12 +167,12 @@ def save_h5ad(adata, path, *, overwrite: bool = True, sparse: bool = True):
     _stringify_object_cols(adata.obs)
     _stringify_object_cols(adata.var)
     adata.write_h5ad(path)
-    log.info("wrote %s (%d cells x %d genes)", path.name, adata.n_obs, adata.n_vars)
+    log.info("保存 %s (%d cells x %d genes)", path.name, adata.n_obs, adata.n_vars)
     return path
 
 
 def load_h5ad_collection(directory, pattern: str = "*.h5ad", backed=None) -> dict:
-    """Load every h5ad in a directory into {file_stem: AnnData}."""
+    """ディレクトリ内の h5ad を {ファイル名stem: AnnData} で一括ロード。"""
     directory = Path(directory)
     out: dict = {}
     for p in sorted(directory.glob(pattern)):
@@ -176,37 +181,10 @@ def load_h5ad_collection(directory, pattern: str = "*.h5ad", backed=None) -> dic
 
 
 # --------------------------------------------------------------------------
-# merge
+# 集計（merge 後の細胞数表など）
 # --------------------------------------------------------------------------
-def merge_adatas(adatas, *, join: str = "outer", gene_key: str = "gene_symbol_upper",
-                 label: str | None = None, keys=None):
-    """Concatenate AnnData objects on a shared gene key (default
-    gene_symbol_upper). No normalization / batch correction is performed.
-
-    `adatas` may be a list or a {name: AnnData} dict (dict keys used as `keys`).
-    """
-    if isinstance(adatas, dict):
-        keys = list(adatas.keys())
-        items = list(adatas.values())
-    else:
-        items = list(adatas)
-
-    parts = []
-    for a in items:
-        b = a.copy()
-        if gene_key in b.var.columns:
-            b.var_names = pd.Index(b.var[gene_key].astype(str))
-            b.var_names_make_unique()
-        parts.append(b)
-
-    merged = ad.concat(parts, join=join, merge="same", uns_merge=None,
-                       label=label, keys=keys, index_unique=None)
-    merged.obs_names_make_unique()
-    return merged
-
-
 def cell_count_table(adata, keys) -> pd.DataFrame:
-    """Cell counts per value for each obs key present (long format)."""
+    """obs の各キー値ごとの細胞数（long 形式）。"""
     rows = []
     for key in keys:
         if key in adata.obs.columns:

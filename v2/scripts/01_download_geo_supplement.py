@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""01_download_geo_supplement.py -- download every manifest file into
-data/raw/<source_accession>/. Resumable; complete files are skipped.
+"""01_download_geo_supplement.py -- manifest の全ファイルを
+data/raw/<source_accession>/ にダウンロードする（レジューム対応・完了済みはスキップ）。
 """
 from __future__ import annotations
 
@@ -20,8 +20,8 @@ log = mf.get_logger("01_download")
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--manifest", default=str(ROOT / "config" / "dataset_manifest.yaml"))
-    ap.add_argument("--datasets", nargs="*", help="dataset_id / source_accession filter")
-    ap.add_argument("--force", action="store_true")
+    ap.add_argument("--datasets", nargs="*", help="dataset_id / source_accession で絞り込み")
+    ap.add_argument("--force", action="store_true", help="既存でも取り直す")
     args = ap.parse_args()
 
     paths = mf.project_paths(ROOT)
@@ -38,13 +38,13 @@ def main() -> int:
         try:
             gd.download_files(ds["files"], dest, force=args.force)
         except Exception as exc:
-            log.error("FAILED %s: %s", ds["dataset_id"], exc)
+            log.error("失敗 %s: %s", ds["dataset_id"], exc)
             failures.append(ds["dataset_id"])
 
     if failures:
-        log.error("download failures: %s", failures)
+        log.error("ダウンロード失敗: %s", failures)
         return 1
-    log.info("all downloads complete")
+    log.info("全ダウンロード完了")
     return 0
 
 
