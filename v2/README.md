@@ -9,6 +9,40 @@ cluster / condition 列は人間が判断する（自動判定しない）。
 
 > コード内のコメント・docstring は日本語。関数定義は `src/`、実行単位はノートブック。
 
+各ディレクトリの詳細はそれぞれの README を参照：
+[`scripts/`](scripts/README.md) / [`notebooks/`](notebooks/README.md) / [`data/`](data/README.md)。
+
+## 実行手順（この順番）
+
+```bash
+# --- 0. 環境（初回のみ）---
+python -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt
+# （v1 の venv を流用するなら PYTHON=../v1/.venv/bin/python ./run.sh）
+
+# --- 1. ダウンロード/展開（.py スクリプト）---
+python scripts/00_validate_manifest.py        # manifest 検証
+python scripts/01_download_geo_supplement.py  # data/raw/ へDL（レジューム）
+python scripts/02_extract_archives.py         # data/extracted/ へ展開
+python scripts/03_list_downloaded_files.py    # 欠落チェック
+python scripts/04_overview.py                 # 俯瞰
+#   まとめて：  ./run.sh
+
+# --- 2. （GSE295514 のみ）R ノートブックで RDS を中間ファイル化 ---
+#   notebooks/R/01_GSE295514_read_rds.ipynb を R kernel で実行
+#   -> data/intermediate_from_r/GSE295514/ に counts.mtx 等を出力
+
+# --- 3. AnnData 以降（Jupyter ノートブックを上から順に）---
+jupyter lab
+#   notebooks/python/01_load_and_inspect_each_gse.ipynb     # 読み込み＋確認
+#   notebooks/python/02_curate_each_gse_and_save_h5ad.ipynb # 整形＋名寄せ履歴＋保存
+#   notebooks/python/03_inspect_preprocessing_state.ipynb   # 前処理段階の診断
+#   notebooks/python/04_merge_curated_h5ad.ipynb            # status-aware merge
+#   notebooks/python/05_check_merged_h5ad.ipynb             # merged の確認
+```
+
+要約：**scripts 00→04** →（GSE295514 は **R/01**）→ **python 01→02→03→04→05**。
+
 ## どこで何をするか
 
 | 段階 | 場所 |
@@ -75,38 +109,7 @@ v2/
 └── run.sh                            # download/extract/list/overview のみ
 ```
 
-## 使い方
-
-### 1. Python 環境
-
-```bash
-python -m venv .venv && . .venv/bin/activate
-pip install -r requirements.txt
-python -m ipykernel install --user --name sma-v2   # 任意：名前付きカーネル
-# （v1 の venv を流用する場合：PYTHON=../v1/.venv/bin/python ./run.sh）
-```
-
-### 2. ダウンロード + 展開（スクリプト）
-
-```bash
-python scripts/00_validate_manifest.py
-python scripts/01_download_geo_supplement.py        # レジューム。--datasets GSE208629 で限定
-python scripts/02_extract_archives.py
-python scripts/03_list_downloaded_files.py
-python scripts/04_overview.py
-# まとめて：  ./run.sh
-```
-
-### 3. AnnData 以降（ノートブック）
-
-JupyterLab で `notebooks/python/` を順に：
-`01_load_and_inspect` → `02_curate` → `03_inspect_preprocessing_state` →
-`04_merge` → `05_check`。**GSE295514** は先に R ノートブック
-`notebooks/R/01_GSE295514_read_rds.ipynb` を実行してから `python/01` で読み込む。
-
-```bash
-jupyter lab
-```
+> 名前付きカーネルを使うなら： `python -m ipykernel install --user --name sma-v2`
 
 ## R ノートブック（GSE295514 RDS）
 
