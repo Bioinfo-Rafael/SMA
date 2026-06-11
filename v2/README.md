@@ -18,7 +18,14 @@ cluster / condition 列は人間が判断する（自動判定しない）。
 # --- 0. 環境（初回のみ）---
 python -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
+python -m ipykernel install --user --name sma-v2 --display-name "Python (SMA v2)"
 # （v1 の venv を流用するなら PYTHON=../v1/.venv/bin/python ./run.sh）
+
+# --- 毎回の起動 ---
+cd v2
+source .venv/bin/activate          # スクリプト実行用
+# または run.sh で:  PYTHON=.venv/bin/python ./run.sh
+jupyter lab                        # ノートブックはカーネル「Python (SMA v2)」を選択
 
 # --- 1. ダウンロード/展開（.py スクリプト）---
 python scripts/00_validate_manifest.py        # manifest 検証
@@ -108,8 +115,6 @@ v2/
 ├── requirements.txt
 └── run.sh                            # download/extract/list/overview のみ
 ```
-
-> 名前付きカーネルを使うなら： `python -m ipykernel install --user --name sma-v2`
 
 ## R ノートブック（GSE295514 RDS）
 
