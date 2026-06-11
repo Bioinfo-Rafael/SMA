@@ -323,3 +323,86 @@ class CurationLog:
         self.to_frame().to_csv(path, index=False)
         print(f"名寄せ履歴を書き出しました -> {path}  ({len(self.records)} 件)")
         return path
+
+
+# ==========================================================================
+# 名寄せ調査：obs 各列が「数値かカテゴリか」「どこに何が入っているか」を調べる
+# （notebooks/python/01b で使用。cell type / 実験条件 を人間が推定するための材料）
+# ==========================================================================
+def _is_numeric_series(s) -> bool:
+    # category dtype は kind が 'O' 等になるので明示的に除外し、純粋な数値だけ True
+    return (s.dtype.kind in ("i", "u", "f")) and str(s.dtype) != "category"
+
+
+def classify_obs_columns(adata, categorical_max_unique: int = 50) -> pd.DataFrame:
+    """obs の各列を「数値 / カテゴリ・文字列 / 真偽」に分類し、ユニーク数・欠損・
+    値の範囲・名寄せの手掛かり(hint)を1表で返す。
+
+    hint はあくまで推定の補助で、cell type / cluster / 条件 を自動判定はしない。
+    """
+    rows = []
+    for col in adata.obs.columns:
+        s = adata.obs[col]
+        dtype = str(s.dtype)
+        n_unique = int(s.nunique(dropna=True))
+        n_missing = int(s.isna().sum())
+        is_numeric = _is_numeric_series(s)
+        is_bool = (s.dtype == bool) or dtype == "bool"
+        value_type = "numeric" if is_numeric else ("boolean" if is_bool else "categorical")
+
+        vmin = vmax = None
+        if is_numeric and s.notna().any():
+            vmin = float(np.nanmin(s.to_numpy(dtype="float64")))
+            vmax = float(np.nanmax(s.to_numpy(dtype="float64")))
+
+        # 名寄せの手掛かり（ユニーク数とタイプから推定）
+        if n_unique <= 1:
+            hint = "定数（メタとして付与済み？）"
+        elif is_numeric:
+            hint = "数値（QC指標/座標/library size 等？）"
+        elif value_type == "boolean" or n_unique <= 6:
+            hint = "少カテゴリ：実験条件/グループ(genotype・treatment・disease 等)候補"
+        elif n_unique <= categorical_max_unique:
+            hint = "中カテゴリ：cell type / cluster / sample 候補"
+        else:
+            hint = "高カーディナリティ：barcode/ID/連続ラベル候補"
+
+        examples = [str(x) for x in pd.Series(s.dropna().unique()[:5])]
+        rows.append({"column": col, "value_type": value_type, "dtype": dtype,
+                     "n_unique": n_unique, "n_missing": n_missing,
+                     "min": vmin, "max": vmax, "hint": hint, "examples": examples})
+    return pd.DataFrame(rows)
+
+
+def print_obs_unique_values(adata, max_list: int = 60, top: int = 40, columns=None) -> None:
+    """obs 各列の中身を print。
+    数値列は describe（少数なら unique も）、カテゴリ列は value_counts（多ければ上位 top）。"""
+    cols = columns or list(adata.obs.columns)
+    for col in cols:
+        s = adata.obs[col]
+        n_unique = int(s.nunique(dropna=True))
+        print(f"\n===== {col}  (dtype={s.dtype}, unique={n_unique}, "
+              f"missing={int(s.isna().sum())}) =====")
+        if _is_numeric_series(s):
+            print(s.describe().to_string())
+            if n_unique <= max_list:
+                print("unique:", sorted(pd.Series(s.dropna().unique()).tolist()))
+        else:
+            vc = s.astype(str).value_counts(dropna=False)
+            if len(vc) <= max_list:
+                print(vc.to_string())
+            else:
+                print(vc.head(top).to_string())
+                print(f"... 他 {len(vc) - top} カテゴリ")
+
+
+def obs_column_presence(adatas: dict) -> pd.DataFrame:
+    """複数データセットで「どの obs 列がどこにあるか」を一覧（セル値=ユニーク数、無い列は NaN）。
+    同じ意味で名前の違う列（名寄せ対象）を横断で見つけるのに使う。"""
+    cols: dict = {}
+    for name, a in adatas.items():
+        for c in a.obs.columns:
+            cols.setdefault(c, {})[name] = int(a.obs[c].nunique(dropna=True))
+    df = pd.DataFrame(cols).T
+    df.index.name = "obs_column"
+    return df.sort_index()
