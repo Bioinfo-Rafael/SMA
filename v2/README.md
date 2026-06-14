@@ -44,11 +44,14 @@ jupyter lab
 #   notebooks/python/01_load_and_inspect_each_gse.ipynb     # 読み込み＋確認
 #   notebooks/python/02_curate_each_gse_and_save_h5ad.ipynb # 整形＋名寄せ履歴＋保存
 #   notebooks/python/03_inspect_preprocessing_state.ipynb   # 前処理段階の診断
-#   notebooks/python/04_merge_curated_h5ad.ipynb            # status-aware merge
-#   notebooks/python/05_check_merged_h5ad.ipynb             # merged の確認
+#   notebooks/python/04a_qc_raw_count_like.ipynb            # raw_count_like の QC（細胞/遺伝子選択のみ）
+#   notebooks/python/04b_qc_cpm_tpm_like.ipynb              # cpm_tpm_like の QC
+#   notebooks/python/04c_qc_log_normalized_like.ipynb       # log_normalized_like の QC
+#   notebooks/python/04d_merge_qc_original_scale.ipynb      # original-scale merge ＋ integrated QC
+#   notebooks/python/05_check_merged_h5ad.ipynb             # merged の検収＋探索的可視化
 ```
 
-要約：**scripts 00→04** →（GSE295514 は **R/01**）→ **python 01→02→03→04→05**。
+要約：**scripts 00→04** →（GSE295514 は **R/01**）→ **python 01→02→03→04a→04b→04c→04d→05**。
 
 ## どこで何をするか
 
@@ -59,8 +62,9 @@ jupyter lab
 | metadata 整形（GSEごと・名寄せ履歴を記録/CSV出力） | notebook `python/02` |
 | per-GSE curated h5ad 保存 | notebook `python/02` |
 | 前処理段階の診断（統計量・分布で推定。揃えない） | notebook `python/03` |
-| curated h5ad の merge（`ad.concat` ネイティブ） | notebook `python/04` |
-| merged h5ad の確認 | notebook `python/05` |
+| preprocessing state 別 QC（細胞/遺伝子選択のみ・`.X` は不変） | notebook `python/04a` `04b` `04c` |
+| QC 済み細胞・遺伝子の original-scale merge ＋ integrated QC | notebook `python/04d` |
+| merged h5ad の検収＋探索的可視化（gene set 確認・PCA/UMAP/Harmony/Leiden・provisional annotation） | notebook `python/05` |
 | RDS を開いて中間ファイル出力 | **R** notebook `R/01_GSE295514_read_rds.ipynb` |
 
 ## データ上の注意
@@ -73,8 +77,11 @@ jupyter lab
 * **GSE295514** は **RDS**：R kernel で開いて中間ファイルを出力 →
   `data_status = RDS_converted_unknown_or_counts`。
 * **GSE173524** は生の `GSE173524_umi.tsv.gz` を使用（`*.sctransform.*` は不使用）。
-* merge は `data/merged_h5ad/` に保存。**status-aware**：`raw_or_filtered_count` のみの merge と、
-  全部を `data_status` 付きで残す merge の2種類。
+* QC は **preprocessing state 別**（`04a`/`04b`/`04c`）。細胞・遺伝子を選択するだけで `.X` の値は変えない
+  （raw count はそのまま、CPM/TPM・log normalized もそのまま保存）。
+* merge（`04d`）は `data/merged_h5ad/` に **original-scale** で保存（正規化しない）。`.X` は
+  raw_count_like / cpm_tpm_like / log_normalized_like が **混在**するので、merged 全体に同じ意味の
+  `total_counts` / `pct_mt` を当てはめない。**outer**（遺伝子の和集合）と **inner**（共通遺伝子）の2種類。
 
 ## 構成
 
@@ -100,7 +107,10 @@ v2/
 │   │   ├── 01_load_and_inspect_each_gse.ipynb
 │   │   ├── 02_curate_each_gse_and_save_h5ad.ipynb
 │   │   ├── 03_inspect_preprocessing_state.ipynb
-│   │   ├── 04_merge_curated_h5ad.ipynb
+│   │   ├── 04a_qc_raw_count_like.ipynb
+│   │   ├── 04b_qc_cpm_tpm_like.ipynb
+│   │   ├── 04c_qc_log_normalized_like.ipynb
+│   │   ├── 04d_merge_qc_original_scale.ipynb
 │   │   └── 05_check_merged_h5ad.ipynb
 │   └── R/
 │       └── 01_GSE295514_read_rds.ipynb
@@ -109,9 +119,14 @@ v2/
 │   ├── extracted/<acc>/              # 展開済み
 │   ├── intermediate_from_r/<acc>/    # R ノートブックの出力（counts.mtx 等）
 │   ├── interim_h5ad/                 # 生 AnnData（notebook 01 で保存）
-│   ├── curated_h5ad/                 # notebook 02 の出力
-│   ├── merged_h5ad/                  # notebook 04 の出力
+│   ├── curated_h5ad/                 # notebook 02 の出力（+ sidecar CSV）
+│   ├── qc_h5ad/<state>/              # notebook 04a/04b/04c の出力（stage1_flagged / stage1_filtered）
+│   ├── merged_h5ad/                  # notebook 04d の出力（original-scale outer / inner）
 │   └── reports/                      # manifest 一覧・ファイル一覧・名寄せ履歴 等
+├── results/                          # git 管理外。ノートブックの出力（QC summary・図・検収結果）
+│   ├── preprocessing_state/          # notebook 03
+│   ├── qc_original_scale_pipeline/   # notebook 04a–04d
+│   └── check_merged_h5ad/            # notebook 05
 ├── requirements.txt
 └── run.sh                            # download/extract/list/overview のみ
 ```
@@ -135,6 +150,11 @@ install.packages("Seurat")              # SeuratObject も入る
 
 ## スコープ
 
-今回は **download / AnnData 化 / 手動確認 / 前処理段階の診断 / 整形 / per-GSE h5ad 保存 /
-merged h5ad 保存** まで。解析・QC・正規化・クラスタリング・UMAP・scVI・batch correction は
-**まだ含めない**。
+**download / AnnData 化 / 手動確認 / 前処理段階の診断 / 整形 / per-GSE h5ad 保存 /
+preprocessing state 別 QC（細胞・遺伝子選択のみ・`.X` は不変）/ original-scale merge ＋ integrated QC /
+merged h5ad の検収** まで。
+
+`05` では検収の一環として、探索用 log-expression copy（copy のみ・original-scale は上書きしない）に
+対する PCA / UMAP / Harmony / Leiden clustering と、PanglaoDB ベースの **provisional / exploratory** な
+自動アノテーションも行う。ただしこれは sanity check であり、最終的な cell type annotation・DE 解析・
+scVI・本番の batch correction は **まだ含めない**。
