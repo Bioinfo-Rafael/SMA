@@ -43,21 +43,90 @@ import scanpy as sc
 sc.settings.verbosity = 1
 warnings.simplefilter("ignore", category=FutureWarning)
 
-# %%
 # =====================================================================
 # パス設定
-#   - __file__ が使える場合は SMA ルートを自動推定する。
-#   - notebook 実行などで __file__ が無い場合は cwd を SMA ルートと仮定する。
+#   - cwd 決め打ちをやめる。
+#   - __file__, cwd, それぞれの親ディレクトリを上にたどり、
+#     SMA root を自動検出する。
+#   - SMA_ROOT 環境変数があればそれを最優先する。
 # =====================================================================
-try:
-    HERE = Path(__file__).resolve()
-    PROJECT_ROOT = HERE.parents[3]  # .../SMA/v2/notebooks/python/07....py -> .../SMA
-except NameError:
-    PROJECT_ROOT = Path.cwd()
+
+REQUIRED_INPUT_RELPATHS = [
+    "v2/data/merged_h5ad/merged_qc_original_scale_inner.h5ad",
+    "v2/results/check_merged_h5ad/inner_logexpr_hvg_pca_umap_harmony_cluster_annotation_check.h5ad",
+]
+
+
+def candidate_roots():
+    """SMA root 候補を列挙する。"""
+    roots = []
+
+    # 1. 環境変数を最優先
+    env_root = os.environ.get("SMA_ROOT")
+    if env_root:
+        roots.append(Path(env_root).expanduser().resolve())
+
+    # 2. script 実行時の __file__ から親をたどる
+    try:
+        here = Path(__file__).resolve()
+        roots.append(here.parent)
+        roots.extend(here.parents)
+    except NameError:
+        pass
+
+    # 3. notebook / interactive 実行時の cwd から親をたどる
+    cwd = Path.cwd().resolve()
+    roots.append(cwd)
+    roots.extend(cwd.parents)
+
+    # 重複除去
+    out = []
+    seen = set()
+    for r in roots:
+        if r not in seen:
+            seen.add(r)
+            out.append(r)
+    return out
+
+
+def looks_like_sma_root(root: Path) -> bool:
+    """必要な入力 h5ad が存在する場所を SMA root とみなす。"""
+    return all((root / rel).exists() for rel in REQUIRED_INPUT_RELPATHS)
+
+
+def find_project_root() -> Path:
+    checked = []
+    for root in candidate_roots():
+        checked.append(root)
+        if looks_like_sma_root(root):
+            return root
+
+    msg = [
+        "SMA project root を自動検出できませんでした。",
+        "",
+        "以下のどちらかで対処してください。",
+        "1. SMAリポジトリのrootで実行する",
+        "2. 環境変数 SMA_ROOT を指定する",
+        "",
+        "例:",
+        "  export SMA_ROOT=/home/suzuki/Learn/SMA",
+        "  python v2/notebooks/python/07_restore_inner_genes_and_cluster7_analysis.py",
+        "",
+        "確認したroot候補:",
+    ]
+    msg.extend([f"  - {p}" for p in checked[:30]])
+    msg.append("")
+    msg.append("各候補で必要だった入力ファイル:")
+    for rel in REQUIRED_INPUT_RELPATHS:
+        msg.append(f"  - {rel}")
+    raise FileNotFoundError("\n".join(msg))
+
+
+PROJECT_ROOT = find_project_root()
 
 
 def rpath(rel: str) -> Path:
-    """'v2/...' のような相対パスを SMA ルート基準の絶対パスに解決する。"""
+    """'v2/...' のような相対パスを SMA root 基準の絶対パスに解決する。"""
     return (PROJECT_ROOT / rel).resolve()
 
 
@@ -80,6 +149,15 @@ FIG_TRACKS_DIR = FIG_DIR / "tracksplot"
 CLUSTER7_DIR = OUT_DIR / "cluster7_summary"
 DEG_DIR = OUT_DIR / "deg"
 PSEUDOBULK_DIR = OUT_DIR / "pseudobulk"
+
+# 入力ファイルが存在することを確認してから出力ディレクトリを作る
+missing_inputs = [p for p in [FULL_INNER_PATH, HVG_RESULT_PATH] if not p.exists()]
+if missing_inputs:
+    raise FileNotFoundError(
+        "入力ファイルが見つかりません:\n"
+        + "\n".join([f"  - {p}" for p in missing_inputs])
+        + "\n\nPROJECT_ROOT の推定が間違っている場合は SMA_ROOT を指定してください。"
+    )
 
 for d in (
     OUT_DIR, FIG_DIR, FIG_UMAP_DIR, FIG_DOT_DIR, FIG_TRACKS_DIR,
