@@ -1,18 +1,29 @@
 # %% [markdown]
-# # 07. inner 遺伝子復元 + cluster 7 解析
+# # 07. inner 遺伝子復元 + cluster 7 (= microglia leiden "6") 解析
 #
-# このスクリプトの目的は、HVG 3000 だけになっている探索用 AnnData (05 の出力) に含まれる
-# クラスタリング・UMAP・annotation 情報を、04d で作成した full inner gene AnnData
-# (inner 遺伝子 ~8863 個) に戻し、その full inner 遺伝子で marker 可視化・DEG・pseudo-bulk
-# 解析を行うことである。
+# このスクリプトの目的は、HVG 3000 + microglia 再クラスタリングが入った探索用 AnnData
+# (06 の microglia-subclustered 出力) に含まれるクラスタリング・UMAP・annotation 情報を、
+# 04d で作成した full inner gene AnnData (inner 遺伝子 ~8863 個) に戻し、その full inner
+# 遺伝子で marker 可視化・DEG・pseudo-bulk 解析を行うことである。
 #
-# 重要な前提（04d / 05 を読んで確認済み）:
+# 重要な前提（04d / 05 / 06 を読んで確認済み）:
+# - HVG/annotation ソースは **06 の microglia-subclustered AnnData**
+#   (adata_microglia_subclustered.h5ad, 66850 microglia cells x 3000 HVG)。
+#   よって joined は「full inner genes (~8863) を持つ microglia サブセット
+#   (~66850 cells) に、microglia 再クラスタリング/UMAP/annotation を載せたもの」になる。
 # - full inner `.X` は **original-scale**（raw_count_like / cpm_tpm_like / log_normalized_like が混在）。
-# - HVG result `.X` は探索用 log-expression（HVG 3000 サブセット）。**この `.X` で上書きしない**。
-# - 両者の var_names は **大文字化** されている可能性が高い（例: "APOE"）。よって marker は
+# - HVG result `.X`（および layers["logexpr"]）は探索用 log-expression（HVG 3000 サブセット）。
+#   **この `.X` で上書きしない**（full inner 側の 8863 genes を維持）。
+# - 両者の var_names は **大文字化** されている（例: "APOE"）。よって marker は
 #   mouse 式 Title case を基本にしつつ、**case-insensitive matching** で解決する。
-# - 05 の post-Harmony UMAP は `obsm["X_umap_after_harmony"]`（basis="umap_after_harmony"）。
+# - microglia 専用 UMAP は `obsm["X_umap_microglia"]`（basis="umap_microglia"）を最優先で使う。
+# - cluster 列は `microglia_leiden_r05`（microglia 再クラスタリング）を最優先で使う。
 # - cell_uid は obs_names と一致している想定だが、両方を確認したうえで対応付けを行う。
+#
+# 【ターゲット cluster について】
+#   ユーザー指示により、解析対象は microglia_leiden_r05 の leiden ラベル "6"。
+#   元指示の「cluster7」はこの leiden "6" を指す。出力ファイル名は元指示どおり
+#   `cluster7_*` を維持しつつ、中身は leiden "6" を対象とする（TARGET_CLUSTER = "6"）。
 #
 # 実行（SMA リポジトリのルートから）:
 # ```bash
@@ -53,7 +64,7 @@ warnings.simplefilter("ignore", category=FutureWarning)
 
 REQUIRED_INPUT_RELPATHS = [
     "v2/data/merged_h5ad/merged_qc_original_scale_inner.h5ad",
-    "v2/results/check_merged_h5ad/inner_logexpr_hvg_pca_umap_harmony_cluster_annotation_check.h5ad",
+    "v2/results/microglia_subclustering/adata_microglia_subclustered.h5ad",
 ]
 
 
@@ -131,8 +142,9 @@ def rpath(rel: str) -> Path:
 
 
 FULL_INNER_PATH = rpath("v2/data/merged_h5ad/merged_qc_original_scale_inner.h5ad")
+# HVG/annotation ソース = 06 の microglia-subclustered AnnData（66850 cells x 3000 HVG）
 HVG_RESULT_PATH = rpath(
-    "v2/results/check_merged_h5ad/inner_logexpr_hvg_pca_umap_harmony_cluster_annotation_check.h5ad"
+    "v2/results/microglia_subclustering/adata_microglia_subclustered.h5ad"
 )
 OUT_DIR = rpath("v2/results/full_inner_with_hvg_annotation_analysis")
 
@@ -201,20 +213,27 @@ MARKER_PRIORITIES = [
     ("priority2", marker_groups_priority2),
 ]
 
-# 探索順の候補列
+# 探索順の候補列（microglia 専用のものを最優先）
 UMAP_BASIS_CANDIDATES = [
-    "umap_after_harmony", "X_umap_after_harmony", "umap", "X_umap",
+    "umap_microglia", "X_umap_microglia",
+    "umap_after_harmony", "X_umap_after_harmony",
+    "umap", "X_umap",
 ]
 GROUPBY_CANDIDATES = [
+    "microglia_leiden_r05", "hvg_microglia_leiden_r05",
+    "microglia_subtype_auto", "hvg_microglia_subtype_auto",
     "leiden_harmony_r05", "hvg_leiden_harmony_r05",
     "leiden_before_harmony_r05", "hvg_leiden_before_harmony_r05",
     "auto_cell_type_marker", "hvg_auto_cell_type_marker",
 ]
 CLUSTER_COL_CANDIDATES = [
+    "microglia_leiden_r05", "hvg_microglia_leiden_r05",
     "leiden_harmony_r05", "hvg_leiden_harmony_r05",
     "leiden_before_harmony_r05", "hvg_leiden_before_harmony_r05",
 ]
-TARGET_CLUSTER = "7"
+# ユーザー指示: 「cluster7」= microglia_leiden_r05 の leiden ラベル "6"。
+# 出力ファイル名は cluster7_* のまま、対象 leiden ラベルは "6"。
+TARGET_CLUSTER = "6"
 SAMPLE_COL_CANDIDATES = [
     "sample_id", "sample_label", "gsm_id", "donor_id",
     "animal_id", "mouse_id", "orig.ident", "source_file",
@@ -454,6 +473,7 @@ rep("")
 rep("-" * 70)
 rep("[HVG candidate columns]")
 hvg_candidate_cols = [
+    "microglia_leiden_r05", "microglia_subtype_auto",
     "leiden_harmony_r05", "leiden_before_harmony_r05", "leiden_before_harmony_r10",
     "auto_cell_type_marker", "cell_type", "Condition",
     "source_accession", "dataset_id", "qc_preprocessing_state",
