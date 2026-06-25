@@ -2,7 +2,9 @@
 
 このディレクトリには、SMA / ALS 関連の scRNA-seq / snRNA-seq データを読み込み、
 Condition の名寄せ、前処理状態の確認、preprocessing state 別 QC、original-scale merge、
-merged h5ad の検収・探索的可視化を行うための Python notebook が入っている。
+merged h5ad の検収・探索的可視化、microglia サブクラスタリング、および
+full inner 遺伝子での cluster 解析（marker 可視化・DEG・pseudo-bulk）までを行う
+Python notebook が入っている。
 
 各ノートブックは番号順に依存している。基本的には下記の実行順序どおりに上から実行する。
 
@@ -16,6 +18,8 @@ merged h5ad の検収・探索的可視化を行うための Python notebook が
 6. `04c_qc_log_normalized_like.ipynb`
 7. `04d_merge_qc_original_scale.ipynb`
 8. `05_check_merged_h5ad.ipynb`
+9. `06_microglia_subclustering_annotation.ipynb`
+10. `07_restore_inner_genes_and_cluster7_analysis.ipynb`（`.py` 版も同梱）
 
 ## Notebooks
 
@@ -162,7 +166,78 @@ Output:
 
 Output:
 - `v2/results/check_merged_h5ad/`（`gene_set/` `pca_umap/` `clustering/` `annotation/` `plots/`）
-- 探索用 AnnData の保存は任意（保存する場合も original-scale とは別ファイル名にする）。
+- 探索用 AnnData `inner_logexpr_hvg_pca_umap_harmony_cluster_annotation_check.h5ad`
+  （HVG 3000・PCA/UMAP/Harmony/Leiden・provisional annotation 済み。06 が入力として読む）。
+
+### 06_microglia_subclustering_annotation.ipynb
+
+05 で保存した探索用 AnnData（`inner_logexpr_hvg_pca_umap_harmony_cluster_annotation_check.h5ad`、
+HVG 3000）を読み込み、**microglia 細胞だけを subset して再クラスタリング・サブタイプ自動注釈**を行う。
+これも provisional / exploratory な解析であり、最終的な cell type annotation ではない。
+
+主な内容:
+- microglia 細胞を subset（66850 cells）し、microglia 専用に Harmony / 近傍グラフ / UMAP
+  （`X_umap_microglia`）を作り直し、`microglia_leiden_r05` で再クラスタリング。
+- Homeostatic / DAM_activated / Complement の score（`score_*`）と、cluster ごとの score 行列から
+  `microglia_subtype_auto`（サブタイプ自動注釈）を付与。
+- marker の dotplot / matrixplot / stacked violin、`microglia_leiden_r05` と `microglia_subtype_auto`
+  の UMAP、Condition / dataset_id 別 composition、cluster 別・subtype 別 DEG（wilcoxon）。
+
+重要:
+- `.X` は 05 由来の探索用 log-expression（HVG 3000）。本解析用の original-scale 行列ではない。
+- 自動サブタイプ注釈は provisional であり、本番アノテーションではない。
+
+Output:
+- `v2/results/microglia_subclustering/adata_microglia_subclustered.h5ad`
+  （66850 microglia cells × 3000 HVG。`obs` に `microglia_leiden_r05` / `microglia_subtype_auto` /
+  `score_*`、`obsm` に `X_umap_microglia` / `X_umap_after_harmony` / `X_pca_harmony` 等）
+- `marker_{dotplot,matrixplot,stacked_violin}_by_{microglia_leiden_r05,microglia_subtype_auto}.png`
+- `umap_microglia_*.png` / `umap_score_*.png`、`composition_*_by_{Condition,dataset_id}.{csv,png}`
+- `deg_by_{cluster,subtype}_wilcoxon.csv` / `deg_by_{cluster,subtype}_*.png`
+- `marker_availability.csv` / `cluster_subtype_score_matrix.csv` /
+  `microglia_subtype_annotation_by_cluster.csv` / `markers/<category>/`
+
+### 07_restore_inner_genes_and_cluster7_analysis.ipynb
+
+06 の microglia-subclustered AnnData（HVG 3000）に載っている **microglia 再クラスタリング /
+UMAP / annotation を、04d の full inner gene AnnData（共通遺伝子 ~8863 個）に戻し**、
+full inner 遺伝子で marker 可視化・DEG・pseudo-bulk 解析を行う。`.py` 版も同梱（同一内容）。
+
+主な内容:
+- `cell_uid` / `obs_names` の overlap で full inner を microglia 細胞（~66850）に整列し、
+  06 の `obs` / `obsm` / `uns` を移植する（列名衝突かつ値が異なる場合は `hvg_` prefix）。
+  発現行列 `.X` は **04d original-scale を保持**（HVG / logexpr の `.X` で上書きしない）。
+- 可視化用に、`qc_preprocessing_state` 別に `normalize_total(1e4)`+`log1p`（log_normalized_like は
+  そのまま）した **log-expression copy** を別途作成する。
+- cluster 列は `microglia_leiden_r05`、UMAP basis は `X_umap_microglia` を最優先で自動検出。
+- **ターゲット cluster = `microglia_leiden_r05` の leiden ラベル "6"**
+  （元指示の「cluster7」がこの leiden "6" に対応。出力ファイル名は `cluster7_*` を維持）。
+- DEG（探索的）: cluster7(=leiden6) vs rest、cluster7 vs ALS reference（`rank_genes_groups`）。
+- pseudo-bulk: `raw_count_like` 細胞のみで sample×cluster / sample×deg_group の count を集約し、
+  logCPM + Welch t-test（BH-FDR）と **edgeR 入力ファイル**を出力。
+
+重要:
+- joined h5ad の `.X` は **04d original-scale**（raw / cpm / log 混在）。定量比較には不適。
+- logexpr h5ad は **可視化・探索用**（exploratory）。
+- scanpy `rank_genes_groups` による DEG は探索的。**厳密な condition DEG は raw_count_like の
+  pseudo-bulk を優先**（edgeR 入力を用意）。
+- 存在しない列 / gene / cluster には警告を出して落ちないようにしている。出力ディレクトリは自動作成。
+- SMA root は `__file__` / cwd / 環境変数 `SMA_ROOT` から自動検出する。
+
+実行（SMA リポジトリのルートから、または `SMA_ROOT` 指定で任意ディレクトリから）:
+
+```bash
+python v2/notebooks/python/07_restore_inner_genes_and_cluster7_analysis.py
+```
+
+Output（`v2/results/full_inner_with_hvg_annotation_analysis/`）:
+- `00_inspection_report.txt` / `00_obs_columns_{full,hvg}.csv` / `00_marker_presence_{full_inner,hvg}.csv`
+- `inner_fullgenes_with_hvg_umap_harmony_cluster_annotation.h5ad`（joined。`.X` = 04d original-scale）
+- `inner_fullgenes_logexpr_with_hvg_umap_harmony_cluster_annotation.h5ad`（logexpr。可視化・探索用）
+- `figures/{umap_feature,dotplot,tracksplot}/`
+- `cluster7_summary/` / `deg/` / `pseudobulk/`（`edgeR_counts.tsv` / `edgeR_metadata.tsv` /
+  `edgeR_design_info.txt` を含む）
+- `README_analysis_summary.md`（実行時に自動生成）
 
 ## Important notes
 
@@ -199,6 +274,19 @@ curated h5ad や merged h5ad では `obs` は最小限にしている。
 PCA / UMAP / Harmony / Leiden や PanglaoDB ベースの自動アノテーションは sanity check / provisional
 であり、最終的な cell type annotation・DE・scVI などは含めない。original-scale の merged h5ad は
 上書きせず、前処理を揃える場合は必ず copy に対して行う。
+
+### Microglia subclustering & inner-gene cluster analysis (06–07)
+
+`06` は 05 の探索用 AnnData（HVG 3000）から microglia を subset して再クラスタリング・
+サブタイプ自動注釈を行う。`07` はその microglia 注釈を 04d の full inner genes（~8863）に戻し、
+marker 可視化・DEG・pseudo-bulk を行う。
+
+- 06 の自動サブタイプ注釈・07 の `rank_genes_groups` DEG はいずれも **探索的（provisional）**。
+- 07 の joined h5ad の `.X` は 04d original-scale（混在スケール）。可視化・探索には logexpr copy を使う。
+- **厳密な condition DEG は `raw_count_like` の pseudo-bulk を優先**する（07 が edgeR 入力を出力）。
+- 07 の解析対象「cluster7」は `microglia_leiden_r05` の **leiden ラベル "6"**（出力名は `cluster7_*` を維持）。
+- pseudo-bulk の sample_id 列が暫定（`source_accession`+`dataset_id`+`Condition`）の場合は
+  biological replicate として弱いため、結果の解釈に注意する（07 がログ・README で警告する）。
 
 ### Deprecated old merge notebook
 
