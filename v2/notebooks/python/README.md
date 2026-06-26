@@ -20,6 +20,7 @@ Python notebook が入っている。
 8. `05_check_merged_h5ad.ipynb`
 9. `06_microglia_subclustering_annotation.ipynb`
 10. `07_restore_inner_genes_and_cluster7_analysis.ipynb`（`.py` 版も同梱）
+11. `08/08_classical_full_inner_and_microglia_reclustering.py`（`--pass 1` → 手動annotation → `--pass 2`）
 
 ## Notebooks
 
@@ -238,6 +239,38 @@ Output（`v2/results/full_inner_with_hvg_annotation_analysis/`）:
 - `cluster7_summary/` / `deg/` / `pseudobulk/`（`edgeR_counts.tsv` / `edgeR_metadata.tsv` /
   `edgeR_design_info.txt` を含む）
 - `README_analysis_summary.md`（実行時に自動生成）
+
+### 08/08_classical_full_inner_and_microglia_reclustering.py
+
+04d の full inner-gene AnnData を入力に、**scVI を使わない古典的 Scanpy workflow**
+（logexpr layer → HVG → scale → PCA → kNN → UMAP → Leiden）で全細胞クラスタリングを行い、
+marker を確認して人手で cell type annotation したのち、microglia-like cluster を抽出して
+再クラスタリングする。スクリプトと専用 README は `08/` フォルダにまとめてある
+（`08/08_classical_full_inner_and_microglia_reclustering.py` /
+`08/08_README_classical_full_inner_and_microglia_reclustering.md`）。
+
+2-pass 設計で、1回目 / 2回目は **`--pass` 引数で明示的に指定**する。
+
+```bash
+python v2/notebooks/python/08/08_classical_full_inner_and_microglia_reclustering.py --pass 1
+# 03_manual_annotation/manual_annotation_template_full_clustering.csv を手動で埋め、
+# manual_annotation_filled_full_clustering.csv として保存してから
+python v2/notebooks/python/08/08_classical_full_inner_and_microglia_reclustering.py --pass 2
+```
+
+重要:
+- 入力 `.X` は original-scale 混在のため、`.X`/`.var` を保持して `logexpr_for_clustering` layer を作り、
+  クラスタリング・可視化に使う（HVG は PCA/UMAP/clustering 用のみ。marker は full inner genes）。
+- `rank_genes_groups` は探索的 cluster marker であり condition DEG ではない。
+- microglia-like の選択は `include_for_microglia_recluster` 列（空なら microglia/DAM/myeloid/macrophage
+  の keyword fallback）に基づく手動選択。
+
+Output（`v2/results/08_classical_full_inner_microglia_reclustering/`、サブフォルダも番号付き）:
+- `01_reports/`（`08_input_qc_report.txt` / `marker_presence_full_inner.csv`）
+- `02_full_clustering/`（`full_inner_classical_clustered.h5ad` / `marker_genes/` / `plots/`）
+- `03_manual_annotation/`（template・filled・`full_inner_with_manual_annotation.h5ad` /
+  `microglia_like_from_manual_annotation.h5ad` / `microglia_selection_summary.csv` / microglia template）
+- `04_microglia_reclustering/`（`microglia_classical_reclustered.h5ad` / `marker_genes/` / `plots/`）
 
 ## Important notes
 
