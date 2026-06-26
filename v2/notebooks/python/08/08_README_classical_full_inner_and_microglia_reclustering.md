@@ -308,3 +308,135 @@ microglia-like subsetの再クラスタリング結果を確認する。
 ```
 
 最後に、microglia subclusterについて再度手動annotationする。
+
+---
+
+# 08b submicroglia parameter sweep
+
+## 目的
+
+08 pass2 で得た microglia 再クラスタリング結果のうち、特定の cluster 群（`microglia_leiden_r1_5` の
+3, 7-17, 20）だけをさらに抽出し、**PCA次元 × kNN近傍数 × Leiden resolution の 3×3×3 = 27 通り**で
+再クラスタリング・可視化・composition 集計を行う探索スクリプト。
+
+意図は、これらの subcluster 構造が PCA 次元数・kNN 近傍数・Leiden resolution に対して
+どれくらい安定か、また Condition / dataset_id に偏った cluster が出ていないかを確認すること。
+
+scriptは `08b_submicroglia_parameter_sweep.py`（`08/` フォルダ内）。08 本体は変更しない。
+
+## 入力
+
+```text
+v2/results/08_classical_full_inner_microglia_reclustering/04_microglia_reclustering/microglia_classical_reclustered.h5ad
+```
+
+この AnnData は `.obs["microglia_leiden_r1_5"]`、`.layers["logexpr_for_clustering"]`、
+full inner genes の var_names を持つ想定。`logexpr_for_clustering` layer を再クラスタリング・plot・
+marker 表示に使う。`.X`（original-scale）は上書きしない（解析用 copy で `.X = layers[...]`）。
+
+## 抽出する cluster
+
+```python
+SELECT_CLUSTERS = ["3"] + [str(i) for i in range(7, 18)] + ["20"]   # 3, 7..17, 20
+```
+
+`microglia_leiden_r1_5` は文字列として比較する。存在しない選択 cluster は警告のうえスキップ、
+0 細胞なら停止。
+
+## パラメータ条件（27通り）
+
+```python
+PCA_DIMS         = [20, 30, 50]
+N_NEIGHBORS_LIST = [5, 15, 20]
+RESOLUTIONS      = [0.5, 1.0, 1.5]
+```
+
+PCA 次元が細胞数・遺伝子数より大きい場合は自動的に `min(n_pcs, n_obs-1, n_hvg-1)` に縮める
+（ディレクトリ名は指定値のまま。実際に使った次元は summary の `actual_n_pcs` に記録）。
+
+処理フロー（各条件）:
+
+```text
+logexpr_for_clustering を .X に入れる
+  → HVG (min(3000, n_vars-1)) → scale → PCA → Harmony → kNN → UMAP → Leiden
+```
+
+Harmony の batch_key は 08 と同じ方針（`source_accession` → `dataset_id` の順、2 水準以上で採用。
+どちらも無ければ Harmony を skip し `X_pca` で neighbors）。Harmony は `scanpy.external.pp.harmony_integrate`
+を優先し、必要なら harmonypy を直接呼んで shape 差を吸収する（08 の `harmony_integrate_to_obsm()` と同等）。
+
+cluster column 名は条件が分かる形式:
+
+```text
+submicro_pca{PCA}_knn{K:02d}_res{res_tag}      例: submicro_pca20_knn05_res0_5
+```
+
+## 出力（h5ad は保存しない）
+
+出力 root:
+
+```text
+v2/results/08_classical_full_inner_microglia_reclustering/05_selected_microglia_parameter_sweep/
+```
+
+**h5ad は一切保存しない**（選択 subset・各条件の再クラスタリング結果とも in-memory のみ）。
+出力は CSV・PNG のみ。ディレクトリ構成:
+
+```text
+05_selected_microglia_parameter_sweep/
+  summary_all_parameter_sets.csv
+  pca20/
+    knn05/
+      res0_5/
+        plots/         # umap_by_{cluster_key}.png / umap_by_Condition.png / umap_by_dataset_id.png
+        dotplots/      # dotplot/tracksplot (all_markers, priority1, priority2) + marker_presence_by_*.csv
+        markers/       # markers_{cluster_key}.csv（探索的 cluster marker。condition DEG ではない）
+        composition/   # counts / cluster-wise / meta-wise fraction の CSV と heatmap、cluster_sizes_*.csv
+      res1_0/
+      res1_5/
+    knn15/ ...
+    knn20/ ...
+  pca30/ ...
+  pca50/ ...
+```
+
+各条件で得られるもの:
+
+1. UMAP（new cluster / Condition / dataset_id）
+2. dotplot / tracksplot（all_markers = priority1+priority2+celltype, priority1, priority2）
+3. marker presence CSV（gene の case-insensitive 解決結果）
+4. cluster marker CSV（`rank_genes_groups`, wilcoxon, full inner genes。探索的）
+5. composition（Condition / dataset_id 別の counts・cluster-wise fraction・meta-wise fraction、
+   06 互換の `by_Condition` / `by_dataset_id` の counts+fraction、各 heatmap、cluster size table）
+
+`summary_all_parameter_sets.csv` に全 27 条件の
+`pca_requested, actual_n_pcs, n_neighbors, resolution, cluster_key, n_cells, n_genes, n_hvg,
+n_clusters, batch_key, harmony_used, output_dir, marker_csv_path, status, error_message` を記録する。
+1 条件が失敗しても全体は止めず、その条件を `status="failed"` として記録し次へ進む。
+
+## 実行方法
+
+08 pass2（`microglia_classical_reclustered.h5ad`）が作成済みであることが前提。
+
+```bash
+cd /home/suzuki/Learn/SMA/v2/notebooks/python/08
+python 08b_submicroglia_parameter_sweep.py
+```
+
+repository root から実行してもよい（project root は自動検出。`SMA_ROOT` 環境変数も使える）:
+
+```bash
+python v2/notebooks/python/08/08b_submicroglia_parameter_sweep.py
+```
+
+実行後、まず `summary_all_parameter_sets.csv` で各条件の cluster 数・harmony_used・status を確認し、
+`pca*/knn*/res*/plots/` の UMAP と `composition/` の heatmap を見て、安定した PCA/kNN/resolution の
+組み合わせや、Condition/dataset_id に偏った cluster の有無を判断する。
+
+## 注意点
+
+- この 08b も探索的解析であり、`rank_genes_groups` の marker は探索的 cluster marker。厳密な
+  condition / disease DEG ではない（pseudobulk を別途行うこと）。
+- HVG は PCA/UMAP/clustering 用のみ。marker 出力・可視化は full inner genes 全体で行う。
+- h5ad を保存しないため、再クラスタリング結果を再利用したい場合は条件を絞って再実行する。
+- 27 条件すべてを回すため計算時間がかかる。途中失敗は summary に記録され、残りは継続する。
