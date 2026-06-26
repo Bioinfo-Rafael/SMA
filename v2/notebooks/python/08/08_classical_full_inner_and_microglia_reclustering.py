@@ -4,8 +4,9 @@
 # 08 classical full inner clustering and microglia reclustering
 # =====================================================================
 # 04d で作成した full inner-gene AnnData (merged_qc_original_scale_inner.h5ad) を入力に、
-# scVI を使わない古典的 Scanpy workflow（log-normalization -> HVG -> scale -> PCA -> kNN ->
-# UMAP -> Leiden）で全細胞クラスタリングを行い、marker gene を確認したうえで人手で
+# scVI を使わない古典的 Scanpy workflow（log-normalization -> HVG -> scale -> PCA -> Harmony ->
+# kNN -> UMAP -> Leiden）で全細胞クラスタリングを行い、marker gene を確認したうえで人手で
+# （Leiden resolution は 1.5 のみを使用する）
 # cell type annotation を行うためのスクリプト。
 #
 # その後、手動 annotation に基づき microglia-like cluster を抽出し、その細胞だけを
@@ -55,6 +56,7 @@ import matplotlib.pyplot as plt
 
 import anndata as ad
 import scanpy as sc
+import scanpy.external as sce
 
 sc.settings.verbosity = 1
 warnings.simplefilter("ignore", category=FutureWarning)
@@ -77,11 +79,12 @@ SCALE_MAX_VALUE = 10
 
 N_TOP_GENES = 3000
 N_PCS = 30
-LEIDEN_RESOLUTIONS = [0.2, 0.4, 0.6, 0.8, 1.0, 1.2]
+# Leiden resolution は 1.5 のみを使用する。
+LEIDEN_RESOLUTIONS = [1.5]
 
 # dotplot / tracksplot / template で使う代表 resolution（存在するものだけ使う）
-SELECTED_FULL_COLS = ["leiden_r0_6", "leiden_r1_0"]
-SELECTED_MICRO_COLS = ["microglia_leiden_r0_6", "microglia_leiden_r1_0"]
+SELECTED_FULL_COLS = ["leiden_r1_5"]
+SELECTED_MICRO_COLS = ["microglia_leiden_r1_5"]
 
 # microglia-like subset 選択時の fallback keyword（case-insensitive）
 MICROGLIA_KEYWORDS = ["microglia", "dam", "myeloid", "macrophage"]
@@ -310,13 +313,57 @@ def run_leiden(work, resolution, key_added):
                           random_state=RANDOM_STATE)
 
 
+def harmony_integrate_to_obsm(sub, batch_key, label=""):
+    """PCA(X_pca) を Harmony で batch 補正し sub.obsm['X_pca_harmony'] (n_obs x n_pcs) を作る。
+
+    まずユーザー指定どおり scanpy の sce.pp.harmony_integrate を使う。ただし scanpy の
+    ラッパは harmonypy の Z_corr を一律 .T して obsm に入れるため、harmonypy 2.x のように
+    Z_corr が (n_obs, n_pcs) を返すバージョンでは shape 不一致で失敗する。その場合は
+    harmonypy を直接呼び、向きを補正して格納する（Harmony 自体は必ず実行する）。
+    どうしても Harmony が実行できない場合のみ RuntimeError を出す。
+    """
+    n = sub.n_obs
+    # 1) scanpy ラッパ（ユーザー指定 API）を優先
+    try:
+        sce.pp.harmony_integrate(
+            sub, key=batch_key, basis="X_pca", adjusted_basis="X_pca_harmony")
+        H = np.asarray(sub.obsm.get("X_pca_harmony"))
+        if H.ndim == 2 and H.shape[0] == n:
+            return
+        warn(f"[{label}] scanpy harmony_integrate の出力 shape={getattr(H, 'shape', None)} が不正。"
+             "harmonypy 直接呼び出しに fallback します。")
+    except Exception as e:
+        warn(f"[{label}] scanpy harmony_integrate が失敗 ({e}); harmonypy 直接呼び出しに fallback します。")
+
+    # 2) harmonypy を直接呼んで向きを補正（harmonypy のバージョン差を吸収）
+    try:
+        import harmonypy
+        ho = harmonypy.run_harmony(
+            np.asarray(sub.obsm["X_pca"]).astype(np.float64),
+            sub.obs, [batch_key], random_state=RANDOM_STATE)
+        Z = np.asarray(ho.Z_corr)
+        if Z.ndim == 2 and Z.shape[0] != n and Z.shape[1] == n:
+            Z = Z.T  # (n_pcs, n_obs) -> (n_obs, n_pcs)
+        if Z.ndim != 2 or Z.shape[0] != n:
+            raise ValueError(f"unexpected Z_corr shape {np.asarray(ho.Z_corr).shape}")
+        sub.obsm["X_pca_harmony"] = np.ascontiguousarray(Z)
+    except Exception as e:
+        raise RuntimeError(
+            f"Harmony integration failed with batch_key={batch_key}. "
+            f"Please check that scanpy.external and harmonypy are installed. "
+            f"Original error: {e}"
+        )
+
+
 def run_classical_pipeline(work, n_top_genes, n_pcs, resolutions, leiden_prefix,
                            batch_key=None, label=""):
-    """古典的 Scanpy workflow（HVG -> scale -> PCA -> kNN -> UMAP -> Leiden）。
+    """古典的 Scanpy workflow（HVG -> scale -> PCA -> Harmony -> kNN -> UMAP -> Leiden）。
 
     work.X は log-expression（logexpr layer の値）である前提。HVG に subset して
-    scale/PCA/UMAP/Leiden を行い、その HVG-subset object を返す（呼び出し側が
-    obsm/obs を full-gene object に転送する）。
+    scale/PCA を行い、PCA 後に Harmony（batch_key で batch 補正）を入れて
+    X_pca_harmony 空間で neighbors/UMAP/Leiden を作り、その HVG-subset object を返す
+    （呼び出し側が obsm/obs を full-gene object に転送する）。
+    batch_key が無い場合のみ Harmony を skip し X_pca を使う。
     返り値: (clustered_hvg, leiden_cols)
     """
     nt = int(min(n_top_genes, max(2, work.n_vars - 1)))
@@ -334,7 +381,25 @@ def run_classical_pipeline(work, n_top_genes, n_pcs, resolutions, leiden_prefix,
     n_comps = max(2, n_comps)
     sc.pp.pca(sub, n_comps=n_comps, svd_solver="arpack", random_state=RANDOM_STATE)
     use_pcs = int(min(n_comps, sub.obsm["X_pca"].shape[1]))
-    sc.pp.neighbors(sub, n_neighbors=15, n_pcs=use_pcs, random_state=RANDOM_STATE)
+
+    # PCA 後に Harmony で batch 補正し、Harmony 補正後の PCA 空間（X_pca_harmony）で
+    # neighbors を作る。batch_key が無い場合のみ Harmony を skip して X_pca を使う。
+    if batch_key and batch_key in sub.obs.columns and sub.obs[batch_key].astype(str).nunique() > 1:
+        log(f"[{label}] Harmony batch_key = {batch_key}")
+        harmony_integrate_to_obsm(sub, batch_key, label)
+        neighbor_kwargs = dict(
+            n_neighbors=15,
+            use_rep="X_pca_harmony",
+            random_state=RANDOM_STATE,
+        )
+    else:
+        warn(f"[{label}] batch_key が無いため Harmony を skip し、X_pca で neighbors を作成します。")
+        neighbor_kwargs = dict(
+            n_neighbors=15,
+            n_pcs=use_pcs,
+            random_state=RANDOM_STATE,
+        )
+    sc.pp.neighbors(sub, **neighbor_kwargs)
     sc.tl.umap(sub, random_state=RANDOM_STATE)
 
     leiden_cols = []
@@ -349,6 +414,8 @@ def run_classical_pipeline(work, n_top_genes, n_pcs, resolutions, leiden_prefix,
 def transfer_clustering(target, source, leiden_cols):
     """HVG-subset の clustering 結果を full-gene object へ転送する（細胞順は同一前提）。"""
     target.obsm["X_pca"] = np.asarray(source.obsm["X_pca"]).copy()
+    if "X_pca_harmony" in source.obsm:
+        target.obsm["X_pca_harmony"] = np.asarray(source.obsm["X_pca_harmony"]).copy()
     target.obsm["X_umap"] = np.asarray(source.obsm["X_umap"]).copy()
     for c in leiden_cols:
         target.obs[c] = pd.Categorical(source.obs[c].astype(str).values)
@@ -679,8 +746,8 @@ def run_pass1(P):
     del adata_clust
     transfer_clustering(adata, clustered_hvg, leiden_cols)
     adata.uns["clustering_note_08"] = (
-        "classical: logexpr layer -> HVG(seurat) -> scale -> PCA(n_pcs=30) -> kNN -> UMAP -> Leiden; "
-        ".X kept original-scale; layer logexpr_for_clustering used for clustering/visualization."
+        "classical: logexpr layer -> HVG(seurat) -> scale -> PCA(n_pcs=30) -> Harmony -> kNN -> UMAP -> Leiden; "
+        "Leiden resolution=1.5; .X kept original-scale; layer logexpr_for_clustering used for clustering/visualization."
     )
     note_overwrite(P.full_clustered)
     adata.write_h5ad(P.full_clustered)

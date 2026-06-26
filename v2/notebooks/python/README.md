@@ -243,7 +243,7 @@ Output（`v2/results/full_inner_with_hvg_annotation_analysis/`）:
 ### 08/08_classical_full_inner_and_microglia_reclustering.py
 
 04d の full inner-gene AnnData を入力に、**scVI を使わない古典的 Scanpy workflow**
-（logexpr layer → HVG → scale → PCA → kNN → UMAP → Leiden）で全細胞クラスタリングを行い、
+（logexpr layer → HVG → scale → PCA → Harmony → kNN → UMAP → Leiden、Leiden resolution=1.5）で全細胞クラスタリングを行い、
 marker を確認して人手で cell type annotation したのち、microglia-like cluster を抽出して
 再クラスタリングする。スクリプトと専用 README は `08/` フォルダにまとめてある
 （`08/08_classical_full_inner_and_microglia_reclustering.py` /

@@ -6,7 +6,7 @@
 
 その後、手動annotationに基づいてmicroglia-like clusterを抽出し、その細胞集団だけを再クラスタリングして、microglia / DAM / IFN応答 / MHC-II / stress / contaminationなどの細かい状態を再度確認する。
 
-この08ではscVIは使わない。PCA, kNN, UMAP, Leiden clusteringを用いた古典的Scanpy workflowのみを実行する。
+この08ではscVIは使わない。PCA後にHarmony（batch補正）を入れた古典的Scanpy workflow（HVG -> scale -> PCA -> Harmony -> kNN -> UMAP -> Leiden）のみを実行する。Leiden resolutionは1.5のみを使用する。
 
 1回目（全細胞クラスタリング）と2回目（microglia再クラスタリング）は、`--pass` 引数で明示的に指定する。
 
@@ -123,8 +123,8 @@ v2/notebooks/python/08/v2/results/...
 2. 入力AnnDataのshape, obs columns, var columns, metadataの分布を確認する（`01_reports/08_input_qc_report.txt`）
 3. marker geneがfull inner objectに存在するか確認する（`01_reports/marker_presence_full_inner.csv`）
 4. `logexpr_for_clustering` layerを作成する（`.X` はoriginal-scaleのまま保持）
-5. HVG 3000を使ってscale, PCA, kNN, UMAP, Leiden clusteringを行う
-6. 複数resolutionのLeiden clusterを出力する（`leiden_r0_2`, `leiden_r0_4`, `leiden_r0_6`, `leiden_r0_8`, `leiden_r1_0`, `leiden_r1_2`）
+5. HVG 3000を使ってscale, PCA, Harmony, kNN, UMAP, Leiden clusteringを行う（batch_keyは `source_accession` → `dataset_id` の順。2水準以上ある列でHarmony補正。無い場合はHarmonyをskipして`X_pca`を使う）
+6. Leiden resolution 1.5 の cluster を出力する（`leiden_r1_5`）
 7. 各clusterのmarker geneを出力する（full inner genesを使用。`02_full_clustering/marker_genes/`）
 8. UMAP, dotplot, tracksplot, marker feature plotを出力する（`02_full_clustering/plots/`）
 9. 手動annotation用CSVを出力する
@@ -199,7 +199,7 @@ filled CSVが存在する場合、以下を行う。
 1. 手動annotationをAnnDataのobsに戻す（cluster_colごとに `manual_annotation_<col>` / `include_for_microglia_recluster_<col>` を追加）
 2. `include_for_microglia_recluster == TRUE` のclusterを抽出する（空ならkeyword fallback）
 3. microglia-like subset AnnDataを保存する
-4. microglia-like subsetだけで再度HVG, scale, PCA, kNN, UMAP, Leiden clusteringを行う
+4. microglia-like subsetだけで再度HVG, scale, PCA, Harmony, kNN, UMAP, Leiden clusteringを行う
 5. microglia subclusterごとのmarker geneを出力する
 6. microglia subset用のUMAP, dotplot, tracksplot, marker feature plotを出力する
 7. microglia subcluster用の手動annotation templateを出力する
